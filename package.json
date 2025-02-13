@@ -1,0 +1,35 @@
+{
+  "name": "translator-app",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "backend": "cd ../Backend && python -m services.app",
+    "frontend": "npm start",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\""
+  },
+  "dependencies": {
+    "@expo/metro-config": "^0.19.9",
+    "@react-navigation/native": "^7.0.14",
+    "@react-navigation/stack": "^7.1.1",
+    "expo": "^52.0.32",
+    "expo-camera": "~16.0.16",
+    "expo-constants": "^17.0.5",
+    "expo-device": "^7.0.2",
+    "expo-status-bar": "^2.0.1",
+    "expo-updates": "^0.26.17",
+    "react": "^18.2.0",
+    "react-native": "^0.76.7",
+    "react-native-gesture-handler": "~2.20.2",
+    "react-native-reanimated": "~3.16.1",
+    "react-native-safe-area-context": "^4.12.0",
+    "react-native-screens": "~4.4.0",
+    "react-native-vector-icons": "^10.2.0",
+    "react-native-web": "^0.19.13"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

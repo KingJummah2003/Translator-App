@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "translator-app",
+    "slug": "translator-app",
+    "version": "1.0.0",
+    "jsEngine": "hermes",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "orientation": "portrait",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.translator.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.translator.app"
+    },
+    "web": {},
+    "extra": {
+      "eas": {
+        "projectId": "a7f117b2-96f9-4f98-b021-fe06d49cd5b8"
+      }
+    },
+    "owner": "h-jum3ah"
+  }
+}
