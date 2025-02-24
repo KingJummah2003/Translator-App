@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "translator-app",
+    "name": "Translator App",
     "slug": "translator-app",
     "version": "1.0.0",
     "jsEngine": "hermes",
@@ -8,11 +8,8 @@
       "policy": "sdkVersion"
     },
     "orientation": "portrait",
-    "splash": {
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "updates": {
+      "enabled": true,
       "fallbackToCacheTimeout": 0
     },
     "assetBundlePatterns": [
@@ -20,13 +17,23 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.translator.app"
+      "bundleIdentifier": "com.translator.app",
+      "buildNumber": "1.0.1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app requires access to the camera for translations.",
+        "NSMicrophoneUsageDescription": "This app requires access to the microphone for voice input.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photos to save captured images.",
+        "NSMotionUsageDescription": "This app may use motion data for improved features.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF"
-      },
-      "package": "com.translator.app"
+      "package": "com.translator.app",
+      "versionCode": 2,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO"
+      ]
     },
     "web": {},
     "extra": {

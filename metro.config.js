@@ -1,6 +1,12 @@
 const { getDefaultConfig } = require("@expo/metro-config");
+const path = require("path");
 
-module.exports = (() => {
-  const config = getDefaultConfig(__dirname);
-  return config;
-})();
+const config = getDefaultConfig(__dirname);
+
+// Ensure Metro watches the correct directories
+config.watchFolders = [path.resolve(__dirname, "src")];
+
+// Fix for Expo Router & other `.cjs` modules
+config.resolver.sourceExts.push("cjs");
+
+module.exports = config;

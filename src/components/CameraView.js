@@ -1,14 +1,20 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
-import { Camera } from "expo-camera";
+import { Camera, CameraType } from "expo-camera";
 
+
+const CameraType = {
+  back: "back",
+  front: "front"
+};
 const CameraView = () => {
   const [hasPermission, setHasPermission] = useState(null);
-  const [cameraType, setCameraType] = useState(Camera.Constants.Type.back);
+  const [cameraType, setCameraType] = useState(CameraType.back);
+  const cameraRef = useRef(null);
 
   useEffect(() => {
     (async () => {
-      const { status } = await Camera.requestCameraPermissionsAsync();
+      const { status } = await Camera.requestPermissionsAsync();
       setHasPermission(status === "granted");
     })();
   }, []);
@@ -18,10 +24,25 @@ const CameraView = () => {
 
   return (
     <View style={styles.container}>
-      <Camera style={styles.camera} type={cameraType} />
+      <Camera ref={cameraRef} style={styles.camera} type={cameraType} />
+      
+      {/* Flip Camera Button */}
+      <TouchableOpacity
+        style={styles.flipButton}
+        onPress={() => setCameraType(cameraType === CameraType.back ? CameraType.front : CameraType.back)}
+      >
+        <Text style={styles.buttonText}>Flip Camera</Text>
+      </TouchableOpacity>
+
+      {/* Capture Button */}
       <TouchableOpacity
         style={styles.captureButton}
-        onPress={() => console.log("📷 Capturing Image")}
+        onPress={async () => {
+          if (cameraRef.current) {
+            const photo = await cameraRef.current.takePictureAsync();
+            console.log("📷 Captured Image:", photo.uri);
+          }
+        }}
       >
         <Text style={styles.buttonText}>Capture</Text>
       </TouchableOpacity>
@@ -36,6 +57,14 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 50,
     backgroundColor: "#e74c3c",
+    padding: 15,
+    borderRadius: 10,
+    alignSelf: "center",
+  },
+  flipButton: {
+    position: "absolute",
+    bottom: 120,
+    backgroundColor: "#3498db",
     padding: 15,
     borderRadius: 10,
     alignSelf: "center",
