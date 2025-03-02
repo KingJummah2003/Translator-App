@@ -1,38 +1,70 @@
 pluginManagement {
-    includeBuild(new File(["node", "--print", "require.resolve('@react-native/gradle-plugin/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().toString())
-}
-plugins { id("com.facebook.react.settings") }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url file("$rootDir/../node_modules/react-native/android") }
+    }
 
-extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
-  if (System.getenv('EXPO_USE_COMMUNITY_AUTOLINKING') == '1') {
-    ex.autolinkLibrariesFromCommand()
-  } else {
-    def command = [
-      'node',
-      '--no-warnings',
-      '--eval',
-      'require(require.resolve(\'expo-modules-autolinking\', { paths: [require.resolve(\'expo/package.json\')] }))(process.argv.slice(1))',
-      'react-native-config',
-      '--json',
-      '--platform',
-      'android'
-    ].toList()
-    ex.autolinkLibrariesFromCommand(command)
-  }
+    // ✅ Ensure React Native Gradle Plugin Exists
+    def reactNativeGradlePluginPath = file("$rootDir/../node_modules/@react-native/gradle-plugin")
+    if (reactNativeGradlePluginPath.exists()) {
+        println "✅ Found @react-native/gradle-plugin at: " + reactNativeGradlePluginPath.getAbsolutePath()
+        includeBuild(reactNativeGradlePluginPath)
+    } else {
+        println "⚠️ WARNING: @react-native/gradle-plugin NOT FOUND in expected location."
+
+        // ✅ Check alternative path (in case of monorepo or incorrect structure)
+        def alternativePath = file("$rootDir/../../node_modules/@react-native/gradle-plugin")
+        if (alternativePath.exists()) {
+            println "✅ Found @react-native/gradle-plugin in alternative path: " + alternativePath.getAbsolutePath()
+            includeBuild(alternativePath)
+        } else {
+            println "❌ ERROR: @react-native/gradle-plugin NOT FOUND IN ANY PATH. Gradle build may fail."
+            println "❌ Try running 'npm install --legacy-peer-deps' to fix missing dependencies."
+        }
+    }
+
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "com.facebook.react") {
+                useModule("com.facebook.react:react-native-gradle-plugin:0.76.7")
+            }
+        }
+    }
 }
 
-rootProject.name = 'Translator App'
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url file("$rootDir/../node_modules/react-native/android") }
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.2.2") // ✅ Ensure correct AGP version
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20") // ✅ Ensure Kotlin compatibility with Gradle
+        classpath("com.facebook.react:react-native-gradle-plugin:0.76.7") // ✅ Ensure React Native Plugin is included
+    }
+}
+
+// ✅ Apply the React Native Plugin correctly
+plugins {
+    id("com.facebook.react") version "0.76.7" apply false
+}
+
+rootProject.name = "TranslatorApp"
 
 dependencyResolutionManagement {
-  versionCatalogs {
-    reactAndroidLibs {
-      from(files(new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim(), "../gradle/libs.versions.toml")))
+    repositories {
+        google()
+        mavenCentral()
+        maven { url file("$rootDir/../node_modules/react-native/android") }
     }
-  }
 }
 
-apply from: new File(["node", "--print", "require.resolve('expo/package.json')"].execute(null, rootDir).text.trim(), "../scripts/autolinking.gradle");
+// ✅ Ensure Expo Modules are linked (Only if using Expo)
+apply(from = file("$rootDir/../scripts/autolinking.gradle"))
 useExpoModules()
 
-include ':app'
-includeBuild(new File(["node", "--print", "require.resolve('@react-native/gradle-plugin/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile())
+include(":app")
