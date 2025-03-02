@@ -1,3 +1,10 @@
-node_modules
+node_modules/
 /android
 /ios
+
+
+android/.gradle/
+android/app/build/
+android/build/
+
+!babel.config.js
