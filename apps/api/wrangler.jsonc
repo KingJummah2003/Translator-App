@@ -31,7 +31,7 @@
 
   "vars": {
     "ENVIRONMENT": "development",
-    "API_URL": "http://localhost:8787",
+    "API_URL": "http://localhost:8790",
     "ADMIN_ORIGINS": "http://localhost:5173",
     "TRANSLATION_PROVIDER": "mock",
     "APP_SCHEME": "translator"

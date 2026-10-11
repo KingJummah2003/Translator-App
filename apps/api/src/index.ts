@@ -6,6 +6,7 @@ import { ApiError } from './errors';
 import { baseHeaders, ipRateLimit, requireUser, userRateLimit } from './middleware';
 import { admin } from './routes/admin';
 import { cloud } from './routes/cloud';
+import { dictionary } from './routes/dictionary';
 import { me } from './routes/me';
 import { webhooks } from './routes/webhooks';
 
@@ -18,6 +19,10 @@ app.get('/health', (c) => c.json({ ok: true }));
 // Accounts: sign-in, sign-up, sessions, one-time codes, account deletion.
 app.use('/api/auth/*', ipRateLimit);
 app.on(['GET', 'POST'], '/api/auth/*', (c) => auth.handler(c.req.raw));
+
+// Free for everyone (signed in or not), limited per IP.
+app.use('/v1/dictionary', ipRateLimit);
+app.route('/v1/dictionary', dictionary);
 
 // Signed-in features, rate limited per user by plan.
 const v1 = new Hono<AppEnv>();

@@ -2,7 +2,7 @@ import { env, exports } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWANCES } from '@translator/shared';
 
-const API = 'http://localhost:8787';
+const API = 'http://localhost:8790';
 
 /** Signs in with a one-time email code, reading the code from the dev email log. */
 async function signIn(email: string): Promise<string> {

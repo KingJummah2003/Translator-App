@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- Ask Google Play services to fetch the unbundled ML Kit models at install time. -->
+    <meta-data
+      android:name="com.google.mlkit.vision.DEPENDENCIES"
+      android:value="ocr,ocr_chinese,ocr_devanagari,ocr_japanese,ocr_korean,langid" />
+  </application>
+</manifest>
