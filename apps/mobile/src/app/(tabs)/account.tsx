@@ -6,6 +6,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
 import { Alert, Linking, StyleSheet, View } from 'react-native';
 import type { Entitlements } from '@translator/shared';
+import { canUseBiometrics } from '@/components/AppLock';
 import { Banner } from '@/components/Banner';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
@@ -147,6 +148,14 @@ export default function AccountScreen() {
         </Section>
 
         <Section title={t('privacy')}>
+          <Row
+            icon="lock"
+            title={t('appLock')}
+            value={settings.appLock}
+            onValueChange={(v) =>
+              void canUseBiometrics().then((ok) => (ok ? updateSettings({ appLock: v }) : setError(t('biometricsUnavailable'))))
+            }
+          />
           <Row icon="history" title={t('saveHistory')} value={settings.saveHistory} onValueChange={(v) => updateSettings({ saveHistory: v })} />
           <Row icon="trash" title={t('clearHistory')} onPress={() => void act('history', clearHistory)} />
           <Row icon="info" title={t('privacyPolicy')} onPress={() => void WebBrowser.openBrowserAsync(PRIVACY_URL)} />

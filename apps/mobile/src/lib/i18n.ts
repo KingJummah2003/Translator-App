@@ -137,6 +137,7 @@ const en = {
   deleteAccount: 'Delete account',
   deleteAccountConfirm: 'This permanently deletes your account, credits and passes. Active store subscriptions must be cancelled in your App Store or Google Play settings. Continue?',
   appLock: 'Require Face ID / fingerprint',
+  biometricsUnavailable: 'Set up Face ID, Touch ID or a fingerprint in your phone settings first.',
   version: 'Version {version}',
   // plans
   plansTitle: 'Do more with cloud translation',
@@ -292,6 +293,7 @@ const ar: Strings = {
   deleteAccount: 'حذف الحساب',
   deleteAccountConfirm: 'سيؤدي هذا إلى حذف حسابك ورصيدك وتصاريحك نهائيًا. يجب إلغاء اشتراكات المتجر الفعّالة من إعدادات App Store أو Google Play. هل تريد المتابعة؟',
   appLock: 'طلب Face ID أو بصمة الإصبع',
+  biometricsUnavailable: 'فعّل Face ID أو Touch ID أو البصمة في إعدادات هاتفك أولًا.',
   version: 'الإصدار {version}',
   plansTitle: 'أنجز المزيد بالترجمة السحابية',
   plansSubtitle: 'أفضل جودة لكل اللغات، والمستندات، ونصوص الكاميرا بأي خط.',
