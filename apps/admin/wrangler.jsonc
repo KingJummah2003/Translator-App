@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "translator-admin",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  // Built portal files. Unknown paths fall back to index.html (single-page app).
+  "assets": { "directory": "dist", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*"] },
+  // Private connection to the API Worker.
+  "services": [{ "binding": "API", "service": "translator-api" }]
+  // Protect the custom domain with a Cloudflare Access application before going live.
+}
