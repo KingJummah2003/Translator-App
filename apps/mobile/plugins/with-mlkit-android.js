@@ -4,7 +4,7 @@
 const { AndroidConfig, withAndroidManifest } = require('expo/config-plugins');
 
 const KEY = 'com.google.mlkit.vision.DEPENDENCIES';
-const MODELS = 'barcode_ui,ocr,ocr_chinese,ocr_devanagari,ocr_japanese,ocr_korean,langid';
+const MODELS = 'barcode_ui,ocr,ocr_chinese,ocr_devanagari,ocr_japanese,ocr_korean';
 
 module.exports = function withMlkitAndroid(config) {
   return withAndroidManifest(config, (cfg) => {

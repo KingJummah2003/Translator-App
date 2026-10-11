@@ -17,8 +17,9 @@ android {
 dependencies {
   // On-device translation; language models (~30 MB each) are downloaded on demand.
   implementation 'com.google.mlkit:translate:17.0.3'
-  // Unbundled variants are delivered by Google Play services, keeping the app small.
-  implementation 'com.google.android.gms:play-services-mlkit-language-id:17.0.0'
+  // Language detection is bundled (about 1 MB) so it works offline from the first launch.
+  implementation 'com.google.mlkit:language-id:17.0.6'
+  // Text recognition models are delivered by Google Play services, keeping the app small.
   implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
   implementation 'com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1'
   implementation 'com.google.android.gms:play-services-mlkit-text-recognition-devanagari:16.0.1'

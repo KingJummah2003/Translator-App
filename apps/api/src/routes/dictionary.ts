@@ -27,6 +27,26 @@ const strip = (html: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/**
+ * Dictionary headwords are base forms. Arabic and Hebrew attach the article and short
+ * prepositions to the word itself (القطار = ال + قطار, הבית = ה + בית), so try those too.
+ */
+export function lookupCandidates(word: string, lang: string): string[] {
+  const clean = word.normalize('NFC').replace(/[\u064B-\u0652\u0640]/g, ''); // Arabic diacritics and tatweel
+  const out = [word, clean, clean.toLowerCase()];
+  if (lang === 'ar' || lang === 'fa' || lang === 'ur') {
+    for (const prefix of ['وال', 'بال', 'فال', 'كال', 'لل', 'ال', 'و', 'ب', 'ل', 'ف', 'ك']) {
+      if (clean.startsWith(prefix) && clean.length - prefix.length >= 2) out.push(clean.slice(prefix.length));
+    }
+  }
+  if (lang === 'he' && clean.length > 2) {
+    for (const prefix of ['וה', 'שה', 'ה', 'ו', 'ב', 'ל', 'מ', 'ש']) {
+      if (clean.startsWith(prefix) && clean.length - prefix.length >= 2) out.push(clean.slice(prefix.length));
+    }
+  }
+  return [...new Set(out)].slice(0, 5);
+}
+
 dictionary.get('/', async (c) => {
   const word = (c.req.query('word') ?? '').trim();
   const lang = c.req.query('lang') ?? '';
@@ -34,13 +54,13 @@ dictionary.get('/', async (c) => {
   if (!isLanguageCode(lang)) throw new ApiError(400, 'bad_request', 'Unsupported language.');
 
   const wiktLang = lang === 'zh-TW' ? 'zh' : lang === 'tl' ? 'tl' : lang.split('-')[0]!;
-  const cacheKey = new Request(`https://cache.internal/dictionary/${wiktLang}/${encodeURIComponent(word.toLowerCase())}`);
+  const cacheKey = new Request(`https://cache.internal/dictionary/v2/${wiktLang}/${encodeURIComponent(word.toLowerCase())}`);
   const cache = (caches as unknown as { default: Cache }).default;
   const hit = await cache.match(cacheKey);
-  if (hit) return hit;
+  if (hit) return new Response(hit.body, { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
   let senses: DictionarySense[] = [];
-  for (const candidate of [...new Set([word, word.toLowerCase()])]) {
+  for (const candidate of lookupCandidates(word, wiktLang)) {
     const res = await fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(candidate)}`, {
       headers: { 'user-agent': `TranslatorApp/2.0 (${c.env.API_URL})`, accept: 'application/json' },
     });
@@ -57,8 +77,13 @@ dictionary.get('/', async (c) => {
     if (senses.length) break;
   }
 
-  const response = c.json({ word, lang, senses, source: 'Wiktionary (CC BY-SA 4.0)' });
-  response.headers.set('cache-control', 'public, max-age=86400');
-  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  const body = JSON.stringify({ word, lang, senses, source: 'Wiktionary (CC BY-SA 4.0)' });
+  // The edge copy is shared and cached ("not found" only briefly, so new entries show up).
+  // Phones are told not to cache: the app keeps its own encrypted copy of looked-up words.
+  const shared = new Response(body, {
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': `public, max-age=${senses.length ? 86400 : 3600}` },
+  });
+  c.executionCtx.waitUntil(cache.put(cacheKey, shared));
+  const response = new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   return response;
 });

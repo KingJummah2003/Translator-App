@@ -47,9 +47,11 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   let version = row?.user_version ?? 0;
   while (version < MIGRATIONS.length) {
-    await db.withExclusiveTransactionAsync(async (tx) => {
-      await tx.execAsync(MIGRATIONS[version]!);
-      await tx.execAsync(`PRAGMA user_version = ${version + 1}`);
+    // Same connection on purpose: an "exclusive" transaction opens a second connection that
+    // would not have the encryption key.
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(MIGRATIONS[version]!);
+      await db.execAsync(`PRAGMA user_version = ${version + 1}`);
     });
     version++;
   }
