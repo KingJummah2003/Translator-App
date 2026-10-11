@@ -35,6 +35,28 @@ async function signIn(email: string): Promise<string> {
   return cookie;
 }
 
+
+/** Runs an auth request and returns the 6-digit code from the dev email log, if one was sent. */
+async function withEmailCode(fn: () => Promise<Response>): Promise<{ res: Response; code: string | undefined }> {
+  const logs: string[] = [];
+  const spy = vi.spyOn(console, 'log').mockImplementation((...args) => void logs.push(args.join(' ')));
+  const res = await fn();
+  let code: string | undefined;
+  for (let i = 0; i < 50 && !code; i++) {
+    code = logs.join('\n').match(/^\s+(\d{6})$/m)?.[1];
+    if (!code) await new Promise((r) => setTimeout(r, 20));
+  }
+  spy.mockRestore();
+  return { res, code };
+}
+
+const post = (path: string, body: unknown, ip: string) =>
+  exports.default.fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: API, 'cf-connecting-ip': ip },
+    body: JSON.stringify(body),
+  });
+
 const call = (cookie: string, path: string, init: RequestInit = {}) =>
   exports.default.fetch(`${API}${path}`, { ...init, headers: { cookie, 'content-type': 'application/json', ...init.headers } });
 
@@ -70,6 +92,32 @@ describe('signed-in flow', () => {
     }
     expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
     expect(statuses.slice(3)).toEqual([429, 429]);
+  });
+
+
+  it('creates a password account, verifies the email, and resets the password', async () => {
+    const email = `pw-${crypto.randomUUID()}@example.com`;
+    const ip = '198.51.100.20';
+    const signUp = await withEmailCode(() => post('/api/auth/sign-up/email', { email, password: 'first-password-1', name: 'Pw' }, ip));
+    expect(signUp.res.status).toBe(200);
+    expect(signUp.code).toBeDefined();
+
+    // Unverified accounts cannot sign in.
+    expect((await post('/api/auth/sign-in/email', { email, password: 'first-password-1' }, ip)).status).toBe(403);
+
+    expect((await post('/api/auth/email-otp/verify-email', { email, otp: signUp.code }, ip)).status).toBe(200);
+    expect((await post('/api/auth/sign-in/email', { email, password: 'first-password-1' }, ip)).status).toBe(200);
+
+    const reset = await withEmailCode(() => post('/api/auth/email-otp/request-password-reset', { email }, ip));
+    expect(reset.res.status).toBe(200);
+    expect((await post('/api/auth/email-otp/reset-password', { email, otp: reset.code, password: 'second-password-2' }, ip)).status).toBe(200);
+    expect((await post('/api/auth/sign-in/email', { email, password: 'first-password-1' }, '198.51.100.21')).status).toBe(401);
+    expect((await post('/api/auth/sign-in/email', { email, password: 'second-password-2' }, '198.51.100.21')).status).toBe(200);
+  });
+
+  it('rejects short passwords', async () => {
+    const res = await post('/api/auth/sign-up/email', { email: `short-${crypto.randomUUID()}@example.com`, password: 'short', name: 'x' }, '198.51.100.30');
+    expect(res.status).toBe(400);
   });
 
   it('validates input and reports insufficient credits', async () => {

@@ -13,7 +13,7 @@ import { dismiss } from '@/lib/nav';
 import { t } from '@/lib/i18n';
 import { radius, space, useColors } from '@/theme';
 
-type Step = 'choose' | 'email' | 'code' | 'password';
+type Step = 'choose' | 'email' | 'code' | 'password' | 'signup' | 'verify' | 'reset' | 'reset-code';
 
 export default function SignInScreen() {
   const c = useColors();
@@ -21,6 +21,7 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [appleAvailable, setAppleAvailable] = useState(false);
@@ -83,6 +84,42 @@ export default function SignInScreen() {
 
   const signInWithPassword = () => attempt('password', () => authClient.signIn.email({ email: email.trim(), password }));
 
+  // Password accounts must confirm their email with a code before the first sign-in.
+  const signUp = () =>
+    attempt('send', async () => {
+      const res = await authClient.signUp.email({ email: email.trim(), password, name: name.trim() || email.trim().split('@')[0]! });
+      if (!res.error) {
+        setCode('');
+        setStep('verify');
+      }
+      return res;
+    });
+
+  const verifySignUp = () =>
+    attempt('verify', async () => {
+      const res = await authClient.emailOtp.verifyEmail({ email: email.trim(), otp: code.trim() });
+      if (res.error) return res;
+      return authClient.signIn.email({ email: email.trim(), password });
+    });
+
+  const requestReset = () =>
+    attempt('send', async () => {
+      const res = await authClient.emailOtp.requestPasswordReset({ email: email.trim() });
+      if (!res.error) {
+        setCode('');
+        setPassword('');
+        setStep('reset-code');
+      }
+      return res;
+    });
+
+  const resetPassword = () =>
+    attempt('verify', async () => {
+      const res = await authClient.emailOtp.resetPassword({ email: email.trim(), otp: code.trim(), password });
+      if (res.error) return res;
+      return authClient.signIn.email({ email: email.trim(), password });
+    });
+
   const input = (props: React.ComponentProps<typeof TextInput>) => (
     <TextInput
       placeholderTextColor={c.textFaint}
@@ -124,8 +161,10 @@ export default function SignInScreen() {
           </View>
         )}
 
-        {(step === 'email' || step === 'password') && (
+        {(step === 'email' || step === 'password' || step === 'signup' || step === 'reset') && (
           <View style={styles.stack}>
+            {step === 'signup' &&
+              input({ value: name, onChangeText: setName, placeholder: t('name'), autoComplete: 'name', textContentType: 'name', accessibilityLabel: t('name') })}
             {input({
               value: email,
               onChangeText: setEmail,
@@ -137,31 +176,46 @@ export default function SignInScreen() {
               autoFocus: true,
               accessibilityLabel: t('email'),
             })}
-            {step === 'password' &&
+            {(step === 'password' || step === 'signup') &&
               input({
                 value: password,
                 onChangeText: setPassword,
-                placeholder: t('password'),
+                placeholder: step === 'signup' ? `${t('password')} (${t('passwordHint')})` : t('password'),
                 secureTextEntry: true,
-                autoComplete: 'current-password',
-                textContentType: 'password',
+                autoComplete: step === 'signup' ? 'new-password' : 'current-password',
+                textContentType: step === 'signup' ? 'newPassword' : 'password',
                 accessibilityLabel: t('password'),
               })}
-            {step === 'email' ? (
+            {step === 'email' && (
               <>
                 <Button title={t('emailCode')} disabled={!validEmail} loading={busy === 'send'} onPress={() => void sendCode()} />
                 <Button title={t('usePassword')} kind="ghost" onPress={() => setStep('password')} />
               </>
-            ) : (
+            )}
+            {step === 'password' && (
               <>
                 <Button title={t('signIn')} disabled={!validEmail || password.length < 10} loading={busy === 'password'} onPress={() => void signInWithPassword()} />
+                <Button title={t('forgotPassword')} kind="ghost" onPress={() => setStep('reset')} />
+                <Button title={t('noAccount')} kind="ghost" onPress={() => setStep('signup')} />
                 <Button title={t('useCode')} kind="ghost" onPress={() => setStep('email')} />
+              </>
+            )}
+            {step === 'signup' && (
+              <>
+                <Button title={t('createAccount')} disabled={!validEmail || password.length < 10} loading={busy === 'send'} onPress={() => void signUp()} />
+                <Button title={t('haveAccount')} kind="ghost" onPress={() => setStep('password')} />
+              </>
+            )}
+            {step === 'reset' && (
+              <>
+                <Button title={t('emailCode')} disabled={!validEmail} loading={busy === 'send'} onPress={() => void requestReset()} />
+                <Button title={t('haveAccount')} kind="ghost" onPress={() => setStep('password')} />
               </>
             )}
           </View>
         )}
 
-        {step === 'code' && (
+        {(step === 'code' || step === 'verify' || step === 'reset-code') && (
           <View style={styles.stack}>
             <Text variant="body">{t('enterCode', { email: email.trim() })}</Text>
             {input({
@@ -175,8 +229,27 @@ export default function SignInScreen() {
               style: styles.code,
               accessibilityLabel: t('verify'),
             })}
-            <Button title={t('verify')} disabled={code.length !== 6} loading={busy === 'verify'} onPress={() => void verifyCode()} />
-            <Button title={t('retry')} kind="ghost" onPress={() => void sendCode()} />
+            {step === 'reset-code' &&
+              input({
+                value: password,
+                onChangeText: setPassword,
+                placeholder: `${t('newPassword')} (${t('passwordHint')})`,
+                secureTextEntry: true,
+                autoComplete: 'new-password',
+                textContentType: 'newPassword',
+                accessibilityLabel: t('newPassword'),
+              })}
+            <Button
+              title={step === 'reset-code' ? t('resetPassword') : t('verify')}
+              disabled={code.length !== 6 || (step === 'reset-code' && password.length < 10)}
+              loading={busy === 'verify'}
+              onPress={() => void (step === 'code' ? verifyCode() : step === 'verify' ? verifySignUp() : resetPassword())}
+            />
+            <Button
+              title={t('retry')}
+              kind="ghost"
+              onPress={() => void (step === 'code' ? sendCode() : step === 'verify' ? authClient.emailOtp.sendVerificationOtp({ email: email.trim(), type: 'email-verification' }) : requestReset())}
+            />
           </View>
         )}
       </View>
