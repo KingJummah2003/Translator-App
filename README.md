@@ -45,7 +45,9 @@ character and image cap for the whole service, and an emergency stop in the admi
 
 ## Running locally
 
-Requirements: Node 22+, Xcode (iOS), Android Studio (Android), CocoaPods.
+Requirements: Node 22+, Xcode (iOS), Android Studio (Android), CocoaPods, and **JDK 17** for Android
+(`brew install openjdk@17`, then `export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`).
+Android Studio's bundled Java 25 is too new for React Native's native build step.
 
 ```bash
 npm install

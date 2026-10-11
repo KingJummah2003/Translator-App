@@ -1,6 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "translator-api",
+  // The top level is LOCAL DEVELOPMENT ONLY (mock translator, relaxed cookies). It has its
+  // own name so a deploy without --env can never replace the production Worker.
+  // Production: npm run deploy  (= wrangler deploy --env production)
+  "name": "translator-api-dev",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   // Better Auth needs AsyncLocalStorage and node:crypto (scrypt password hashing).

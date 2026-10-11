@@ -3,7 +3,6 @@ import { betterAuth } from 'better-auth';
 import { admin, emailOTP } from 'better-auth/plugins';
 import { expo } from '@better-auth/expo';
 import { ALLOWANCES, SESSION_RULES } from '@translator/shared';
-import { addCreditsStatements } from './credits';
 import { sendEmail } from './email';
 import { deleteRevenueCatCustomer } from './revenuecat';
 import type { Env } from './env';
@@ -11,7 +10,8 @@ import type { Env } from './env';
 const DAY_S = 86_400;
 const ABSOLUTE_MS = SESSION_RULES.absoluteDays * DAY_S * 1000;
 const bindings = env as unknown as Env;
-const isDev = bindings.ENVIRONMENT !== 'production';
+// Only an explicit 'development' value relaxes anything; a missing or mistyped value is treated as production.
+const isDev = bindings.ENVIRONMENT === 'development';
 
 const list = (value: string | undefined) =>
   (value ?? '')
@@ -134,11 +134,27 @@ export const auth = betterAuth({
     user: {
       create: {
         after: async (user) => {
-          if (ALLOWANCES.welcomeCredits > 0) {
-            await bindings.DB.batch(
-              addCreditsStatements(bindings.DB, user.id, 'grant', ALLOWANCES.welcomeCredits, 'welcome', null),
-            );
-          }
+          if (ALLOWANCES.welcomeCredits <= 0) return;
+          // Once per email address ever, so deleting and recreating an account (or using
+          // name+tag@ variants) doesn't mint new free credits. Each step only runs if the
+          // previous one inserted a row.
+          const now = Date.now();
+          const db = bindings.DB;
+          await db.batch([
+            db.prepare('INSERT INTO welcome_grant (email_hash, created_at) VALUES (?, ?) ON CONFLICT DO NOTHING').bind(await emailHash(user.email), now),
+            db
+              .prepare(
+                `INSERT INTO credit_bucket (id, user_id, kind, balance, expires_at, period_key, created_at)
+                 SELECT ?, ?, 'grant', ?, NULL, 'main', ? WHERE changes() = 1`,
+              )
+              .bind(crypto.randomUUID(), user.id, ALLOWANCES.welcomeCredits, now),
+            db
+              .prepare(
+                `INSERT INTO credit_ledger (id, user_id, bucket_kind, delta, reason, ref, actor, created_at)
+                 SELECT ?, ?, 'grant', ?, 'welcome', NULL, NULL, ? WHERE changes() = 1`,
+              )
+              .bind(crypto.randomUUID(), user.id, ALLOWANCES.welcomeCredits, now),
+          ]);
         },
       },
     },
@@ -170,6 +186,17 @@ export const auth = betterAuth({
 export type Session = typeof auth.$Infer.Session;
 
 export const SESSION_ABSOLUTE_MS = ABSOLUTE_MS;
+
+/** Keyed hash of a normalised email address (lowercase, no +tag, Gmail dots ignored). */
+export async function emailHash(email: string): Promise<string> {
+  const [local = '', domain = ''] = email.trim().toLowerCase().split('@');
+  let name = local.split('+')[0]!;
+  if (domain === 'gmail.com' || domain === 'googlemail.com') name = name.replaceAll('.', '');
+  const normalised = `${name}@${domain === 'googlemail.com' ? 'gmail.com' : domain}`;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(bindings.BETTER_AUTH_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(normalised));
+  return Array.from(new Uint8Array(mac), (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 function otpEmail(otp: string, type: string): string {
   const purpose =

@@ -10,6 +10,6 @@ export function getProvider(env: Env): TranslationProvider {
     if (!env.GOOGLE_API_KEY) throw new Error('GOOGLE_API_KEY is not set');
     return googleProvider(env.GOOGLE_API_KEY);
   }
-  if (env.ENVIRONMENT === 'production') throw new Error('The mock provider cannot run in production');
+  if (env.ENVIRONMENT !== 'development') throw new Error('TRANSLATION_PROVIDER must be "google" outside development');
   return mockProvider;
 }

@@ -1,8 +1,11 @@
 import { Hono } from 'hono';
 import {
   COSTS,
+  DocumentTooComplexError,
   REQUEST_LIMITS,
   batchSegments,
+  splitLong,
+  type Tier,
   extractDocument,
   isLanguageCode,
   isRtl,
@@ -29,8 +32,9 @@ cloud.post('/translate', async (c) => {
   const body = await parseJson(c, translateRequest);
   const { id: userId } = c.get('user');
   const chars = body.text.length;
+  const tier = await getTier(c.env.DB, userId);
 
-  const result = await runPaid(getProvider(c.env), c.env.DB, userId, 'translate', chars, COSTS.translateText(chars), c.get('requestId'), (p) =>
+  const result = await runPaid(getProvider(c.env), c.env.DB, userId, tier, 'translate', chars, COSTS.translateText(chars), c.get('requestId'), (p) =>
     p.translate([body.text], body.source, body.target),
   );
   return c.json<TranslateResponse>({
@@ -41,27 +45,40 @@ cloud.post('/translate', async (c) => {
   });
 });
 
+/**
+ * Reads the text in a photo, and translates it when `target` is given. Reading costs a
+ * flat price; translating the text is charged like any other text, so a full page of
+ * camera text costs the same as typing it.
+ */
 cloud.post('/ocr', async (c) => {
   const body = await parseJson(c, ocrRequest);
   const { id: userId } = c.get('user');
   if (base64Bytes(body.image) > REQUEST_LIMITS.maxImageBytes) throw new ApiError(413, 'too_large', 'That image is too large.');
   const provider = getProvider(c.env);
+  const tier = await getTier(c.env.DB, userId);
+  const requestId = c.get('requestId');
 
-  const result = await runPaid(provider, c.env.DB, userId, 'ocr', 0, COSTS.ocrImage(), c.get('requestId'), async (p) => {
-    const ocr = await p.ocr(body.image);
-    if (!body.target || !ocr.text.trim()) return { ...ocr, translation: null };
-    // Translating the recognised text is included in the OCR price up to the text limit.
-    const text = ocr.text.slice(0, REQUEST_LIMITS.maxTextChars);
-    const t = await p.translate([text], ocr.detectedSource ?? 'auto', body.target);
-    return { ...ocr, translation: t.translations[0] ?? '', detectedSource: ocr.detectedSource ?? t.detectedSource };
-  });
-  return c.json<OcrResponse>({
-    text: result.value.text,
-    translation: result.value.translation,
-    detectedSource: result.value.detectedSource,
-    charged: result.charged,
-    balance: result.balance,
-  });
+  const ocr = await runPaid(provider, c.env.DB, userId, tier, 'ocr', 0, COSTS.ocrImage(), requestId, (p) => p.ocr(body.image));
+  let { charged, balance } = ocr;
+  let detectedSource = ocr.value.detectedSource;
+  let translation: string | null = null;
+
+  const text = ocr.value.text.slice(0, REQUEST_LIMITS.maxTextChars);
+  if (body.target && text.trim()) {
+    try {
+      const t = await runPaid(provider, c.env.DB, userId, tier, 'translate', text.length, COSTS.translateText(text.length), requestId, (p) =>
+        p.translate([text], detectedSource ?? 'auto', body.target!),
+      );
+      translation = t.value.translations[0] ?? '';
+      detectedSource ??= t.value.detectedSource;
+      charged += t.charged;
+      balance = t.balance;
+    } catch (err) {
+      // Not enough credits left to translate: still return the text that was read.
+      if (!(err instanceof ApiError && err.code === 'insufficient_credits')) throw err;
+    }
+  }
+  return c.json<OcrResponse>({ text: ocr.value.text, translation, detectedSource, charged, balance });
 });
 
 /**
@@ -70,9 +87,6 @@ cloud.post('/ocr', async (c) => {
  */
 cloud.post('/documents', async (c) => {
   const { id: userId } = c.get('user');
-  const length = Number(c.req.header('content-length') ?? 0);
-  if (length > REQUEST_LIMITS.maxDocumentBytes + 64 * 1024) throw new ApiError(413, 'too_large', 'That file is too large (10 MB max).');
-
   const form = await c.req.formData().catch(() => {
     throw new ApiError(400, 'bad_request', 'Expected a multipart form upload.');
   });
@@ -92,7 +106,8 @@ cloud.post('/documents', async (c) => {
   let doc;
   try {
     doc = extractDocument(type, new Uint8Array(await file.arrayBuffer()));
-  } catch {
+  } catch (err) {
+    if (err instanceof DocumentTooComplexError) throw new ApiError(413, 'too_large', err.message);
     throw new ApiError(400, 'bad_request', 'That file could not be read. Is it a valid document?');
   }
   const chars = totalChars(doc.segments);
@@ -103,17 +118,28 @@ cloud.post('/documents', async (c) => {
   }
 
   const provider = getProvider(c.env);
-  const result = await runPaid(provider, c.env.DB, userId, 'document', chars, COSTS.translateDocument(chars), c.get('requestId'), async (p) => {
-    const out: string[] = new Array(doc.segments.length);
+  const result = await runPaid(provider, c.env.DB, userId, tier, 'document', chars, COSTS.translateDocument(chars), c.get('requestId'), async (p) => {
+    // Very long paragraphs are split into pieces the provider accepts, then rejoined.
+    const pieces: string[] = [];
+    const owner: number[] = [];
+    doc.segments.forEach((segment, i) => {
+      for (const piece of splitLong(segment, p.maxBatchChars)) {
+        pieces.push(piece);
+        owner.push(i);
+      }
+    });
+    const translated: string[] = new Array(pieces.length);
     let detected: string | null = null;
-    for (const batch of batchSegments(doc.segments, p.maxBatchChars)) {
+    for (const batch of batchSegments(pieces, p.maxBatchChars)) {
       for (let i = 0; i < batch.texts.length; i += p.maxBatchSegments) {
         const texts = batch.texts.slice(i, i + p.maxBatchSegments);
         const r = await p.translate(texts, detected ?? source, target);
         detected ??= r.detectedSource;
-        r.translations.forEach((t, j) => (out[batch.indexes[i + j]!] = t));
+        r.translations.forEach((t, j) => (translated[batch.indexes[i + j]!] = t));
       }
     }
+    const out: string[] = doc.segments.map(() => '');
+    translated.forEach((t, k) => (out[owner[k]!] += t));
     return doc.rebuild(out, { rtl: isRtl(target) });
   });
 
@@ -135,22 +161,26 @@ async function runPaid<T>(
   provider: TranslationProvider,
   db: D1Database,
   userId: string,
+  tier: Tier,
   action: Action,
   chars: number,
   credits: number,
   requestId: string,
   work: (p: TranslationProvider) => Promise<T>,
 ): Promise<{ value: T; charged: number; balance: number }> {
-  await assertWithinBudget(db, action, chars);
+  await assertWithinBudget(db, action, chars, tier);
   const taken: Charge = await charge(db, userId, credits, action, requestId);
   let value: T;
   try {
     value = await work(provider);
   } catch (err) {
+    // The user gets their credits back, but the provider may already have billed part of
+    // the work, so it still counts toward the service's daily cap.
     await refund(db, taken, requestId);
+    await recordUsage(db, userId, action, chars, 0, tier).catch(() => {});
     throw err;
   }
-  await recordUsage(db, userId, action, chars, credits);
+  await recordUsage(db, userId, action, chars, credits, tier);
   return { value, charged: credits, balance: await getBalance(db, userId) };
 }
 

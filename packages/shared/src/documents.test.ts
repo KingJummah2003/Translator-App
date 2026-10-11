@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { batchSegments, extractDocx, extractText } from './documents';
+import { DocumentTooComplexError, batchSegments, extractDocx, extractText, splitLong } from './documents';
 
 function makeDocx(body: string): Uint8Array {
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`;
@@ -74,5 +74,25 @@ describe('batchSegments', () => {
       { indexes: [0, 1], texts: ['aaa', 'bb'] },
       { indexes: [2, 3], texts: ['cccc', 'd'] },
     ]);
+  });
+});
+
+describe('limits', () => {
+  it('rejects a tiny file with a huge number of paragraphs before using lots of memory', () => {
+    const body = '<w:p/><w:p></w:p>'.repeat(60_000);
+    expect(() => extractDocx(makeDocx(body))).toThrow(DocumentTooComplexError);
+  });
+
+  it('splits long text on sentence ends and rejoins without losing characters', () => {
+    const text = 'One two three. '.repeat(50);
+    const parts = splitLong(text, 100);
+    expect(parts.every((p) => p.length <= 100)).toBe(true);
+    expect(parts.join('')).toBe(text);
+    expect(parts[0]!.endsWith('. ')).toBe(true);
+  });
+
+  it('hard-splits text without spaces', () => {
+    const parts = splitLong('x'.repeat(250), 100);
+    expect(parts.map((p) => p.length)).toEqual([100, 100, 50]);
   });
 });

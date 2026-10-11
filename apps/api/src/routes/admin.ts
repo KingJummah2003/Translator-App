@@ -4,7 +4,7 @@ import { addCreditsStatements, getEntitlements, removeCredits } from '../credits
 import type { AppEnv } from '../env';
 import { ApiError } from '../errors';
 import { forgetTier, requireAdmin } from '../middleware';
-import { syncSubscription } from '../revenuecat';
+import { deleteRevenueCatCustomer, syncSubscription } from '../revenuecat';
 import { clearSettingsCache, getSettings } from '../usage';
 import { parseJson } from '../validate';
 
@@ -191,6 +191,7 @@ admin.delete('/users/:id', async (c) => {
   const confirm = c.req.query('confirm');
   if (confirm !== id) throw new ApiError(400, 'bad_request', 'Pass ?confirm=<user id> to delete this account.');
   await c.env.DB.batch([c.env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(id), audit(c, 'user.delete', id, null)]);
+  c.executionCtx.waitUntil(deleteRevenueCatCustomer(c.env, id));
   return c.json({ ok: true });
 });
 
@@ -217,6 +218,7 @@ const settingsBody = z.object({
   servicePaused: z.boolean().optional(),
   globalDailyCharCap: z.number().int().min(0).max(10_000_000_000).optional(),
   globalDailyOcrCap: z.number().int().min(0).max(100_000_000).optional(),
+  freeDailyCharCap: z.number().int().min(0).max(10_000_000_000).optional(),
 });
 
 admin.put('/settings', async (c) => {
@@ -227,6 +229,7 @@ admin.put('/settings', async (c) => {
   if (body.servicePaused !== undefined) rows.push(['service_paused', body.servicePaused ? '1' : '0']);
   if (body.globalDailyCharCap !== undefined) rows.push(['global_daily_char_cap', String(body.globalDailyCharCap)]);
   if (body.globalDailyOcrCap !== undefined) rows.push(['global_daily_ocr_cap', String(body.globalDailyOcrCap)]);
+  if (body.freeDailyCharCap !== undefined) rows.push(['free_daily_char_cap', String(body.freeDailyCharCap)]);
   if (!rows.length) throw new ApiError(400, 'bad_request', 'Nothing to change.');
   await c.env.DB.batch([
     ...rows.map(([key, value]) =>

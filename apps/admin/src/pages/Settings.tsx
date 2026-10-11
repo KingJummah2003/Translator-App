@@ -6,12 +6,14 @@ interface Settings {
   servicePaused: boolean;
   globalDailyCharCap: number;
   globalDailyOcrCap: number;
+  freeDailyCharCap: number;
 }
 
 export function Settings() {
   const { data, error, reload } = useAdmin<Settings>('/settings');
   const [charCap, setCharCap] = useState('');
   const [ocrCap, setOcrCap] = useState('');
+  const [freeCap, setFreeCap] = useState('');
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -19,6 +21,7 @@ export function Settings() {
     if (data) {
       setCharCap(String(data.globalDailyCharCap));
       setOcrCap(String(data.globalDailyOcrCap));
+      setFreeCap(String(data.freeDailyCharCap));
     }
   }, [data]);
 
@@ -74,7 +77,7 @@ export function Settings() {
           <div>
             <h2 style={{ margin: 0 }}>Daily spending caps</h2>
             <p className="muted">
-              Once reached, cloud features pause until midnight UTC. Currently {fmtNum(data.globalDailyCharCap)} characters and {fmtNum(data.globalDailyOcrCap)} images per day. Use 0 for no cap.
+              Once reached, cloud features pause until midnight UTC. Currently {fmtNum(data.globalDailyCharCap)} characters and {fmtNum(data.globalDailyOcrCap)} images per day, of which free accounts together may use {fmtNum(data.freeDailyCharCap)} characters. Use 0 for no cap.
             </p>
           </div>
         </div>
@@ -87,10 +90,14 @@ export function Settings() {
             Images per day
             <input type="number" min={0} value={ocrCap} onChange={(e) => setOcrCap(e.target.value)} />
           </label>
+          <label className="field">
+            Free accounts, characters per day
+            <input type="number" min={0} value={freeCap} onChange={(e) => setFreeCap(e.target.value)} />
+          </label>
           <button
             style={{ alignSelf: 'flex-end' }}
-            disabled={busy || charCap === '' || ocrCap === ''}
-            onClick={() => void save({ globalDailyCharCap: Number(charCap), globalDailyOcrCap: Number(ocrCap) }, 'Caps saved.')}>
+            disabled={busy || charCap === '' || ocrCap === '' || freeCap === ''}
+            onClick={() => void save({ globalDailyCharCap: Number(charCap), globalDailyOcrCap: Number(ocrCap), freeDailyCharCap: Number(freeCap) }, 'Caps saved.')}>
             Save caps
           </button>
         </div>

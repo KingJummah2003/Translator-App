@@ -21,6 +21,7 @@ export function extractText(bytes: Uint8Array): ExtractedDocument {
   const source = strFromU8(bytes).replace(/^\uFEFF/, '');
   // Keep blank-line structure: translate each paragraph, keep separators as they were.
   const parts = source.split(/(\r?\n\s*\r?\n)/);
+  if (parts.length > MAX_PARAGRAPHS * 2) throw new DocumentTooComplexError();
   const segmentIndexes: number[] = [];
   const segments: string[] = [];
   parts.forEach((part, i) => {
@@ -46,6 +47,15 @@ export function extractText(bytes: Uint8Array): ExtractedDocument {
 
 const DOCX_TEXT_PARTS = /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/;
 const MAX_UNZIPPED_BYTES = 60 * 1024 * 1024;
+/** Limits that keep a small, malicious file from exhausting memory while it is parsed. */
+const MAX_TEXT_XML_BYTES = 15 * 1024 * 1024;
+const MAX_PARAGRAPHS = 50_000;
+
+export class DocumentTooComplexError extends Error {
+  constructor() {
+    super('This document is too large or complex to translate.');
+  }
+}
 
 interface TextNode {
   /** Index in the XML string where the text content starts and ends. */
@@ -73,10 +83,13 @@ export function extractDocx(bytes: Uint8Array): ExtractedDocument {
 
   const xml: Record<string, string> = {};
   const paragraphs: Paragraph[] = [];
+  let xmlBytes = 0;
   for (const name of Object.keys(files).sort()) {
     if (!DOCX_TEXT_PARTS.test(name)) continue;
+    xmlBytes += files[name]!.length;
+    if (xmlBytes > MAX_TEXT_XML_BYTES) throw new DocumentTooComplexError();
     xml[name] = strFromU8(files[name]!);
-    paragraphs.push(...scanParagraphs(name, xml[name]!));
+    for (const p of scanParagraphs(name, xml[name]!, MAX_PARAGRAPHS - paragraphs.length)) paragraphs.push(p);
   }
 
   const withText = paragraphs.filter((p) =>
@@ -110,7 +123,7 @@ export function extractDocx(bytes: Uint8Array): ExtractedDocument {
 }
 
 /** Finds every paragraph and the text nodes that belong to it (innermost paragraph wins). */
-function scanParagraphs(part: string, source: string): Paragraph[] {
+function scanParagraphs(part: string, source: string, budget: number): Paragraph[] {
   const found: Paragraph[] = [];
   const stack: Paragraph[] = [];
   const tag = /<(\/?)w:(p|t)\b([^>]*)>/g;
@@ -122,6 +135,7 @@ function scanParagraphs(part: string, source: string): Paragraph[] {
       if (closing) {
         const p = stack.pop();
         if (p) found.push(p);
+        if (found.length > budget) throw new DocumentTooComplexError();
       } else if (!selfClosing) {
         stack.push({ part, openEnd: m.index + whole.length, texts: [] });
       }
@@ -175,7 +189,7 @@ export function extractDocument(type: 'txt' | 'docx', bytes: Uint8Array): Extrac
 
 /**
  * Packs segments into batches no larger than `maxChars` each so a provider can translate
- * many short paragraphs in one call. Very long segments are split on sentence ends.
+ * many short paragraphs in one call.
  */
 export function batchSegments(segments: string[], maxChars: number): { indexes: number[]; texts: string[] }[] {
   const batches: { indexes: number[]; texts: string[] }[] = [];
@@ -192,6 +206,33 @@ export function batchSegments(segments: string[], maxChars: number): { indexes: 
   });
   flush();
   return batches;
+}
+
+/**
+ * Splits text longer than `maxChars` into pieces, preferring sentence ends, then spaces.
+ * Each piece keeps its trailing whitespace, so joining the translated pieces with ''
+ * restores the spacing.
+ */
+export function splitLong(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+  const pieces: string[] = [];
+  let rest = text;
+  while (rest.length > maxChars) {
+    const window = rest.slice(0, maxChars);
+    // End of the last sentence mark (including its space) in the window, if any.
+    const sentenceEnd = Math.max(
+      ...['. ', '! ', '? ', '؟ ', '。', '\n'].map((m) => {
+        const i = window.lastIndexOf(m);
+        return i < 0 ? -1 : i + m.length;
+      }),
+    );
+    const space = window.lastIndexOf(' ');
+    const cut = sentenceEnd > maxChars / 2 ? sentenceEnd : space > maxChars / 2 ? space + 1 : maxChars;
+    pieces.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  if (rest) pieces.push(rest);
+  return pieces;
 }
 
 export function totalChars(segments: string[]): number {

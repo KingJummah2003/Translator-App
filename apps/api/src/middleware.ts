@@ -8,7 +8,9 @@ import { ApiError } from './errors';
 
 /** Requires a signed-in, non-banned user whose session is younger than 60 days. */
 export const requireUser = createMiddleware<AppEnv>(async (c, next) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  // Always read the session from the database (not the 5-minute cookie cache) so bans,
+  // sign-out-everywhere and password resets take effect on the very next request.
+  const session = await auth.api.getSession({ headers: c.req.raw.headers, query: { disableCookieCache: true } });
   if (!session) throw new ApiError(401, 'unauthorized', 'Please sign in.');
 
   // Backstop for the absolute session lifetime (the cookie cache can skip the DB hook).
@@ -88,9 +90,13 @@ let jwks: { domain: string; set: ReturnType<typeof createRemoteJWKSet> } | null 
  * token on every request instead of trusting that traffic came through Access.
  */
 export const requireAdmin = createMiddleware<AppEnv & { Variables: { adminEmail: string } }>(async (c, next) => {
-  const { ACCESS_TEAM_DOMAIN: domain, ACCESS_AUD: aud, ENVIRONMENT } = c.env;
+  const { ACCESS_TEAM_DOMAIN: domain, ACCESS_AUD: aud, ENVIRONMENT, ADMIN_DEV_BYPASS } = c.env;
   if (!domain || !aud) {
-    if (ENVIRONMENT === 'development') {
+    // Local development only: needs ENVIRONMENT=development, ADMIN_DEV_BYPASS=1 (set in
+    // .dev.vars, never as a deployed secret) and a request to localhost.
+    const host = new URL(c.req.url).hostname;
+    const local = host === 'localhost' || host === '127.0.0.1';
+    if (ENVIRONMENT === 'development' && ADMIN_DEV_BYPASS === '1' && local) {
       c.set('adminEmail', 'dev-admin@localhost');
       return next();
     }

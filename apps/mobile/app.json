@@ -194,7 +194,8 @@
         }
       ],
       "./plugins/with-mlkit-simulator",
-      "./plugins/with-ios-scene-lifecycle"
+      "./plugins/with-ios-scene-lifecycle",
+      "./plugins/with-mlkit-android"
     ],
     "experiments": {
       "typedRoutes": true,

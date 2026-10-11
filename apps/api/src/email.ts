@@ -3,7 +3,7 @@ import type { Env } from './env';
 /** Sends a plain-text email through Resend. In local development it prints to the console instead. */
 export async function sendEmail(env: Env, message: { to: string; subject: string; text: string }): Promise<void> {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
-    if (env.ENVIRONMENT === 'production') {
+    if (env.ENVIRONMENT !== 'development') {
       console.error('Email is not configured: set RESEND_API_KEY and EMAIL_FROM');
       return;
     }

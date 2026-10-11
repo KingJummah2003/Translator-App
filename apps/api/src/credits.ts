@@ -217,6 +217,63 @@ export async function removeCredits(
   return take;
 }
 
+/* ------------------------------------------------------------------ subscription allowances */
+
+const ALLOWANCE_KINDS = `('sub_daily', 'vip_weekly')`;
+
+/**
+ * Removes the unspent daily/weekly allowance when a subscription ends, is refunded or
+ * changes tier. Allowances belong to the subscription, not the account.
+ */
+export function revokeAllowanceStatements(
+  db: D1Database,
+  userId: string,
+  reason: string,
+  now: number,
+  kinds: BucketKind[] = ['sub_daily', 'vip_weekly'],
+): D1PreparedStatement[] {
+  const inKinds = `(${kinds.map((k) => `'${k}'`).join(', ')})`;
+  const where = `user_id = ?1 AND kind IN ${inKinds} AND balance > 0 AND expires_at > ?2`;
+  return [
+    db
+      .prepare(
+        `INSERT INTO credit_ledger (id, user_id, bucket_kind, delta, reason, ref, actor, created_at)
+         SELECT lower(hex(randomblob(16))), user_id, kind, -balance, ?3, period_key, NULL, ?2 FROM credit_bucket WHERE ${where}`,
+      )
+      .bind(userId, now, reason),
+    db.prepare(`UPDATE credit_bucket SET balance = 0 WHERE ${where}`).bind(userId, now),
+  ];
+}
+
+/**
+ * A subscription moved to another account (RevenueCat TRANSFER, e.g. "Restore purchases"
+ * while signed in as someone else). The current period's allowance moves with it, so the
+ * same period can never be granted twice by transferring back and forth.
+ */
+export function moveAllowanceStatements(db: D1Database, fromUser: string, toUser: string, now: number): D1PreparedStatement[] {
+  const live = `user_id = ?1 AND kind IN ${ALLOWANCE_KINDS} AND expires_at > ?3`;
+  const free = `NOT EXISTS (SELECT 1 FROM credit_bucket b WHERE b.user_id = ?2 AND b.kind = credit_bucket.kind AND b.period_key = credit_bucket.period_key)`;
+  return [
+    db
+      .prepare(
+        `INSERT INTO credit_ledger (id, user_id, bucket_kind, delta, reason, ref, actor, created_at)
+         SELECT lower(hex(randomblob(16))), ?2, kind, balance, 'transfer_in', period_key, NULL, ?3 FROM credit_bucket
+         WHERE ${live} AND balance > 0 AND ${free}`,
+      )
+      .bind(fromUser, toUser, now),
+    db
+      .prepare(
+        `INSERT INTO credit_ledger (id, user_id, bucket_kind, delta, reason, ref, actor, created_at)
+         SELECT lower(hex(randomblob(16))), user_id, kind, -balance, 'transfer_out', period_key, NULL, ?3 FROM credit_bucket
+         WHERE ${live} AND balance > 0`,
+      )
+      .bind(fromUser, toUser, now),
+    db.prepare(`UPDATE credit_bucket SET user_id = ?2 WHERE ${live} AND ${free}`).bind(fromUser, toUser, now),
+    // Periods the receiving account already had: the sender's copy is simply removed.
+    db.prepare(`UPDATE credit_bucket SET balance = 0 WHERE ${live}`).bind(fromUser, toUser, now),
+  ];
+}
+
 /* ------------------------------------------------------------------ session passes */
 
 /** Starts the user's oldest unused 3-hour pass. Only one pass can run at a time. */
@@ -236,19 +293,30 @@ export async function activatePass(db: D1Database, userId: string, now = Date.no
   const product = PRODUCTS.pass_3h;
   if (product.kind !== 'pass') throw new Error('pass_3h must be a pass product');
   const expiresAt = now + product.durationMinutes * 60_000;
+  // Each statement only runs if the previous one changed a row, so a concurrent activation
+  // can neither start a second pass nor write a second credit grant.
   const results = await db.batch([
     db
-      .prepare(`UPDATE session_pass SET status = 'active', activated_at = ?, expires_at = ? WHERE id = ? AND status = 'available'`)
-      .bind(now, expiresAt, pass.id),
+      .prepare(
+        `UPDATE session_pass SET status = 'active', activated_at = ?1, expires_at = ?2
+         WHERE id = ?3 AND status = 'available'
+           AND NOT EXISTS (SELECT 1 FROM session_pass WHERE user_id = ?4 AND status = 'active' AND expires_at > ?1)`,
+      )
+      .bind(now, expiresAt, pass.id, userId),
     db
       .prepare(
         `INSERT INTO credit_bucket (id, user_id, kind, balance, expires_at, period_key, created_at)
          SELECT ?, ?, 'pass', ?, ?, ?, ? WHERE changes() = 1`,
       )
       .bind(crypto.randomUUID(), userId, product.credits, expiresAt, pass.id, now),
-    ledger(db, userId, 'pass', product.credits, 'pass_activated', pass.id, null, now),
+    db
+      .prepare(
+        `INSERT INTO credit_ledger (id, user_id, bucket_kind, delta, reason, ref, actor, created_at)
+         SELECT ?, ?, 'pass', ?, 'pass_activated', ?, NULL, ? WHERE changes() = 1`,
+      )
+      .bind(crypto.randomUUID(), userId, product.credits, pass.id, now),
   ]);
-  if (results[0]!.meta.changes !== 1) throw new ApiError(409, 'bad_request', 'That pass was just used. Please try again.');
+  if (results[0]!.meta.changes !== 1) throw new ApiError(409, 'bad_request', 'A session pass is already running.');
   return { passId: pass.id, expiresAt };
 }
 

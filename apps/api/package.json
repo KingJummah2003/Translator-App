@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy --env production",
     "db:migrate:local": "wrangler d1 migrations apply translator --local",
-    "db:migrate:remote": "wrangler d1 migrations apply translator --remote",
+    "db:migrate:remote": "wrangler d1 migrations apply translator --remote --env production",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test",
     "types": "wrangler types --env-interface CloudflareBindings"

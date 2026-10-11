@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { REQUEST_LIMITS } from '@translator/shared';
 import { auth } from './auth';
 import { dailyCleanup } from './cron';
 import type { AppEnv, Env } from './env';
@@ -16,8 +18,22 @@ app.use('*', baseHeaders);
 
 app.get('/health', (c) => c.json({ ok: true }));
 
+// Request size limits, enforced while reading the body (so chunked uploads can't skip them).
+const tooLarge = (c: import('hono').Context) => c.json({ error: { code: 'too_large', message: 'That request is too large.' } }, 413);
+const limit = (maxSize: number) => bodyLimit({ maxSize, onError: tooLarge });
+app.use('/api/auth/*', limit(16 * 1024));
+app.use('/webhooks/*', limit(256 * 1024));
+app.use('/admin/*', limit(64 * 1024));
+app.use('/v1/documents', limit(REQUEST_LIMITS.maxDocumentBytes + 64 * 1024));
+app.use('/v1/ocr', limit(Math.ceil((REQUEST_LIMITS.maxImageBytes * 4) / 3) + 16 * 1024));
+app.use('/v1/translate', limit(64 * 1024));
+app.use('/v1/me/*', limit(16 * 1024));
+
 // Accounts: sign-in, sign-up, sessions, one-time codes, account deletion.
 app.use('/api/auth/*', ipRateLimit);
+// Better Auth's own admin endpoints (impersonate, set password...) are not used: admin work
+// goes through /admin, which is behind Cloudflare Access and audited.
+app.all('/api/auth/admin/*', (c) => c.json({ error: { code: 'not_found', message: 'Not found.' } }, 404));
 app.on(['GET', 'POST'], '/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // Free for everyone (signed in or not), limited per IP.

@@ -32,6 +32,10 @@ export interface Env {
   /** Cloudflare Access team domain and application audience for the admin portal. */
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  /** Local development only (.dev.vars): lets the admin portal work without Cloudflare Access. */
+  ADMIN_DEV_BYPASS?: string;
+  /** Comma-separated user ids whose App Store / Play sandbox purchases count (testers). */
+  SANDBOX_USER_IDS?: string;
 }
 
 export interface Variables {

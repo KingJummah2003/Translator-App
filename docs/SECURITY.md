@@ -17,7 +17,13 @@
   limit is enforced twice: in a database hook and in the request middleware.
 - Brute-force protection: per-route limits stored in D1 (for example 5 sign-in attempts per 5 minutes),
   plus a per-IP limit on every auth route at the edge.
-- Suspended users are blocked at sign-in and all their sessions are removed.
+- Suspended users are blocked at sign-in, all their sessions are removed, and API requests always read
+  the session from the database, so bans and "sign out everywhere" apply instantly.
+- Better Auth's built-in admin endpoints are disabled. Admin work only happens through the
+  Access-protected, audited admin API.
+- Deploy safety: the development config has a different Worker name. Development-only behaviour
+  (mock translator, console emails, admin bypass) needs an explicit `ENVIRONMENT=development`; the
+  admin bypass also needs `ADMIN_DEV_BYPASS=1` and a localhost request.
 
 ## Money
 
@@ -28,7 +34,13 @@
   `UNIQUE` constraint plus an atomic batch.
 - Subscription state is re-read from RevenueCat's API on every event, so forged or out-of-order events
   can't grant a plan.
-- Refunds claw back unspent credits and end passes immediately.
+- Refunds claw back unspent credits and end passes immediately, in one atomic step that a retried or
+  duplicated webhook can't repeat.
+- Subscription allowances belong to the subscription. They are removed when it ends, is refunded or
+  changes tier, and moved (not re-granted) when it transfers to another account.
+- Sandbox (test) purchases only count for allow-listed tester accounts in production.
+- Welcome credits are given once per email address (a keyed hash survives account deletion; `+tags`
+  and Gmail dots are normalised).
 - Charging is atomic: `CHECK (balance >= 0)` makes concurrent requests unable to overspend (covered by
   a test that races six requests).
 
@@ -36,8 +48,11 @@
 
 - Per-plan rate limits (10 to 90 requests a minute, Cloudflare Rate Limiting).
 - Per-request limits: 5,000 characters of text, 4 MB images, 10 MB documents, and a per-plan document
-  length limit.
-- Unpacked size limit on Word files (protects against zip bombs).
+  length limit. Body sizes are enforced while streaming, so chunked uploads can't bypass them.
+- Word files: unpacked-size, text-size and paragraph-count limits, which protect against zip bombs and
+  memory exhaustion.
+- A separate daily cap for free accounts, so free usage can't consume the paying users' budget.
+- Failed provider calls are refunded to the user but still counted toward the daily cap.
 - A global daily cap on characters and images, plus an emergency stop, both in the admin portal.
 - Charge happens before the provider call, with an automatic refund on failure, so failures never cost users.
 

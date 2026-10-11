@@ -22,6 +22,7 @@ you publish (for users). Have a lawyer review the published version for the coun
 | Credit balance and credit history | Billing and support | Until you delete your account |
 | Daily usage counts (requests, characters, credits) | Fair use and cost control | 400 days, then deleted automatically |
 | Admin actions on your account | Accountability | Kept for audit |
+| A keyed hash of your email address (not the address) | Giving the welcome credits only once | Kept after deletion; it can't be turned back into your address |
 
 ## What stays on your phone
 

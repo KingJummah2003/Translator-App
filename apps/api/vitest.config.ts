@@ -13,6 +13,7 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             BETTER_AUTH_SECRET: 'test-secret-test-secret-test-secret-123',
             REVENUECAT_WEBHOOK_AUTH: 'Bearer test-webhook-secret',
+            ADMIN_DEV_BYPASS: '1',
           },
         },
       }),

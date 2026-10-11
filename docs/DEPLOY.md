@@ -28,11 +28,15 @@ npx wrangler d1 create translator --jurisdiction=eu        # data stays in the E
 3. Apply the tables and set the secrets:
 
 ```bash
-npx wrangler d1 migrations apply translator --remote --env production
+npm run db:migrate:remote
 openssl rand -base64 32 | npx wrangler secret put BETTER_AUTH_SECRET --env production
 echo "Bearer $(openssl rand -hex 24)" | tee /dev/stderr | npx wrangler secret put REVENUECAT_WEBHOOK_AUTH --env production
-npx wrangler deploy --env production
+npm run deploy          # always deploys the production configuration
 ```
+
+> The top-level config in `wrangler.jsonc` is for local development only and is named
+> `translator-api-dev`, so a deploy without `--env production` can never replace production.
+> Never set `ADMIN_DEV_BYPASS` as a deployed secret.
 
 Save the `Bearer …` value it prints; RevenueCat needs it in step 7.
 Then in the Cloudflare dashboard → Workers → `translator-api` → **Settings → Domains**, add `api.example.com`.
@@ -101,14 +105,19 @@ echo "WEB_ID,IOS_ID,ANDROID_ID" | npx wrangler secret put GOOGLE_OAUTH_CLIENT_ID
 2. Import the products.
 3. Create **entitlements** `pro` (the Pro products) and `vip` (the VIP products).
 4. Create an **offering** named `default` containing all nine products as packages.
-5. Integrations → **Webhooks**:
+5. Project settings → **Restore behavior**: choose **"Keep with original App User ID"**. This stops one
+   Apple or Google account's subscription from being shared across several app accounts by restoring purchases.
+6. Integrations → **Webhooks**:
    - URL: `https://api.example.com/webhooks/revenuecat`
    - Authorization header: the `Bearer …` value from step 2.
-6. Send a test event. The admin portal's audit and purchase pages will show live data from then on.
-7. Set the server secret and the app's public keys:
+7. Send a test event. The admin portal's audit and purchase pages will show live data from then on.
+8. Set the server secret and the app's public keys. The secret key is **required** in production: the
+   server re-checks every subscription with RevenueCat instead of trusting webhook contents.
 
 ```bash
 npx wrangler secret put REVENUECAT_SECRET_KEY --env production   # secret key (sk_...)
+# Optional: let your own test accounts use App Store / Play sandbox purchases against production
+echo "user-id-1,user-id-2" | npx wrangler secret put SANDBOX_USER_IDS --env production
 ```
 
 Set `EXPO_PUBLIC_REVENUECAT_IOS_KEY` and `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY` (public `appl_` / `goog_` keys) as EAS variables.
@@ -175,6 +184,7 @@ The daily service cap (admin portal → Service settings) is the final safety ne
 - [ ] Sandbox purchases of every product tested on a real iPhone and Android phone
 - [ ] Refund of a credit pack tested (credits are clawed back)
 - [ ] Offline translation tested on a real iPhone (the Simulator can't run ML Kit)
-- [ ] Daily caps set in the admin portal
+- [ ] Daily caps set in the admin portal, including the free-account cap
+- [ ] RevenueCat restore behaviour set to "Keep with original App User ID"
 - [ ] Budget alert set in Google Cloud
 - [ ] Privacy policy and terms published
