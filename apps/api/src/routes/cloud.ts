@@ -30,7 +30,7 @@ cloud.post('/translate', async (c) => {
   const { id: userId } = c.get('user');
   const chars = body.text.length;
 
-  const result = await paid(c.env.DB, userId, 'translate', chars, COSTS.translateText(chars), c.get('requestId'), (p) =>
+  const result = await runPaid(getProvider(c.env), c.env.DB, userId, 'translate', chars, COSTS.translateText(chars), c.get('requestId'), (p) =>
     p.translate([body.text], body.source, body.target),
   );
   return c.json<TranslateResponse>({
@@ -39,10 +39,6 @@ cloud.post('/translate', async (c) => {
     charged: result.charged,
     balance: result.balance,
   });
-
-  function paid<T>(...args: Parameters<typeof runPaid<T>> extends [unknown, ...infer R] ? R : never) {
-    return runPaid<T>(getProvider(c.env), ...args);
-  }
 });
 
 cloud.post('/ocr', async (c) => {

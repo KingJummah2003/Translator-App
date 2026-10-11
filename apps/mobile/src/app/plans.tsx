@@ -148,7 +148,7 @@ export default function PlansScreen() {
               ? option(
                   p.id,
                   `${t(p.tier === 'vip' ? 'vipPlan' : 'proPlan')} · ${t(PERIOD_LABEL[p.period]!)}`,
-                  p.tier === 'vip' ? t('vipFeatures') : t('proFeatures'),
+                  p.tier === 'vip' ? t('vipFeatures', { credits: ALLOWANCES.vipWeeklyCredits.toLocaleString() }) : t('proFeatures', { credits: ALLOWANCES.proDailyCredits }),
                   p.tier === 'vip' ? 'diamond' : 'crown',
                   p.id === 'pro_yearly',
                 )
