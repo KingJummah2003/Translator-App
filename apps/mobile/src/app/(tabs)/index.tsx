@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useNetworkState } from 'expo-network';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Share, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, Share, StyleSheet, TextInput, View } from 'react-native';
 import { isRtl } from '@translator/shared';
 import { Banner } from '@/components/Banner';
 import { Button, IconButton } from '@/components/Button';
@@ -58,6 +58,7 @@ export default function TranslateScreen() {
     const input = text.trim();
     if (!input) return;
     const id = ++request.current;
+    if (engine === 'cloud') Keyboard.dismiss();
     setBusy(true);
     setError(null);
     try {
@@ -177,7 +178,7 @@ export default function TranslateScreen() {
 
       {(route.kind === 'cloud' || (route.kind === 'download' && route.cloudPossible)) && text.trim().length > 0 && !result && (
         <Button
-          title={`${t('translate')} · ${t('betterQualityHint', { credits: cloudCost(text) })}`}
+          title={`${t('translate')} · ${t('costCredits', { credits: cloudCost(text) })}`}
           icon="cloud"
           onPress={() => void run('cloud')}
           loading={busy}

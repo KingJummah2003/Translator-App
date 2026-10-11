@@ -9,6 +9,7 @@ import { Screen } from '@/components/Screen';
 import { Text } from '@/components/Text';
 import { authClient } from '@/lib/auth';
 import { GOOGLE_SIGN_IN } from '@/lib/config';
+import { dismiss } from '@/lib/nav';
 import { t } from '@/lib/i18n';
 import { radius, space, useColors } from '@/theme';
 
@@ -34,7 +35,7 @@ export default function SignInScreen() {
     try {
       const res = await fn();
       if (res && res.error) throw new Error(res.error.message ?? t('error'));
-      if (kind !== 'send') router.back();
+      if (kind !== 'send') dismiss();
     } catch (e) {
       const err = e as { code?: string; message?: string };
       if (err.code !== 'ERR_REQUEST_CANCELED' && err.code !== 'SIGN_IN_CANCELLED') setError(err.message ?? t('error'));
@@ -95,7 +96,7 @@ export default function SignInScreen() {
   return (
     <Screen edges={['top', 'bottom']}>
       <View style={styles.close}>
-        <IconButton icon="close" label={t('close')} onPress={() => router.back()} />
+        <IconButton icon="close" label={t('close')} onPress={() => dismiss()} />
       </View>
       <View style={styles.body}>
         <Text variant="display">{t('signInTitle')}</Text>
@@ -119,7 +120,7 @@ export default function SignInScreen() {
             {GOOGLE_SIGN_IN.webClientId ? (
               <Button title={t('continueWithGoogle')} kind="secondary" icon="globe" loading={busy === 'google'} onPress={() => void signInWithGoogle()} />
             ) : null}
-            <Button title={t('continueWithEmail')} kind="secondary" icon="info" onPress={() => setStep('email')} />
+            <Button title={t('continueWithEmail')} kind="secondary" icon="mail" onPress={() => setStep('email')} />
           </View>
         )}
 

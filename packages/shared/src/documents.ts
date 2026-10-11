@@ -18,7 +18,7 @@ export interface ExtractedDocument {
 /* ------------------------------------------------------------------ plain text */
 
 export function extractText(bytes: Uint8Array): ExtractedDocument {
-  const source = new TextDecoder('utf-8').decode(bytes).replace(/^﻿/, '');
+  const source = strFromU8(bytes).replace(/^\uFEFF/, '');
   // Keep blank-line structure: translate each paragraph, keep separators as they were.
   const parts = source.split(/(\r?\n\s*\r?\n)/);
   const segmentIndexes: number[] = [];
@@ -37,7 +37,7 @@ export function extractText(bytes: Uint8Array): ExtractedDocument {
       segmentIndexes.forEach((partIndex, i) => {
         out[partIndex] = translations[i]!;
       });
-      return new TextEncoder().encode(out.join(''));
+      return strToU8(out.join(''));
     },
   };
 }

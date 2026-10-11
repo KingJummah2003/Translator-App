@@ -11,6 +11,7 @@ import { Screen } from '@/components/Screen';
 import { Text } from '@/components/Text';
 import { authClient } from '@/lib/auth';
 import { PRIVACY_URL, TERMS_URL } from '@/lib/config';
+import { dismiss } from '@/lib/nav';
 import { t, type StringKey } from '@/lib/i18n';
 import { buy, getOffering, purchasesEnabled, restore } from '@/lib/purchases';
 import { radius, space, useColors } from '@/theme';
@@ -54,7 +55,7 @@ export default function PlansScreen() {
     setBusy(id);
     setError(null);
     try {
-      if (await buy(pkg)) router.back();
+      if (await buy(pkg)) dismiss();
     } catch (e) {
       setError(e instanceof Error ? e.message : t('error'));
     } finally {
@@ -103,7 +104,7 @@ export default function PlansScreen() {
   return (
     <Screen edges={['top', 'bottom']}>
       <View style={styles.close}>
-        <IconButton icon="close" label={t('close')} onPress={() => router.back()} />
+        <IconButton icon="close" label={t('close')} onPress={() => dismiss()} />
       </View>
       <View style={styles.hero}>
         <Icon name="sparkles" size={36} color={c.accent} />
@@ -158,7 +159,7 @@ export default function PlansScreen() {
           (['credits_100', 'credits_500', 'credits_2000'] as const).map((id) => {
             const p = PRODUCTS[id];
             return p.kind === 'credits'
-              ? option(id, `${p.credits.toLocaleString()} ${t('credits')}`, `≈ ${(p.credits * 500).toLocaleString()} characters`, 'bolt', id === 'credits_500')
+              ? option(id, `${p.credits.toLocaleString()} ${t('credits')}`, t('aboutChars', { chars: (p.credits * 500).toLocaleString() }), 'bolt', id === 'credits_500')
               : null;
           })}
         {loading && (
@@ -171,7 +172,7 @@ export default function PlansScreen() {
       <Button title={t('restorePurchases')} kind="ghost" loading={busy === 'restore'} onPress={() => void (setBusy('restore'), restore().finally(() => setBusy(null)))} />
 
       <Text variant="caption" tone="faint" align="center" style={styles.legal}>
-        {`Subscriptions renew automatically until cancelled at least 24 hours before the end of the period. Payment is charged to your App Store or Google Play account. Pro includes ${ALLOWANCES.proDailyCredits} credits a day and VIP ${ALLOWANCES.vipWeeklyCredits.toLocaleString()} credits a week; unused allowance does not roll over. Purchased credits never expire.`}
+        {t('plansLegal', { pro: ALLOWANCES.proDailyCredits, vip: ALLOWANCES.vipWeeklyCredits.toLocaleString() })}
       </Text>
       <View style={styles.links}>
         <Button title={t('terms')} kind="ghost" compact onPress={() => void WebBrowser.openBrowserAsync(TERMS_URL)} />

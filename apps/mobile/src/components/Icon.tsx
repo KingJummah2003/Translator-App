@@ -41,6 +41,7 @@ const ICONS = {
   warning: { ios: 'exclamationmark.triangle.fill', android: 'warning' },
   wifi: { ios: 'wifi', android: 'wifi' },
   waveform: { ios: 'waveform', android: 'graphic_eq' },
+  mail: { ios: 'envelope', android: 'mail' },
 } as const satisfies Record<string, { ios: SymbolViewProps['name'] & string; android: string }>;
 
 export type IconName = keyof typeof ICONS;
