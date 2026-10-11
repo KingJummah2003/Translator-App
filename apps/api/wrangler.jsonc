@@ -1,0 +1,70 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "translator-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // Better Auth needs AsyncLocalStorage and node:crypto (scrypt password hashing).
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "translator",
+      // Replace with the id printed by: npx wrangler d1 create translator --jurisdiction=eu
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Requests per 60 seconds per key. Keep in sync with RATE_LIMITS_PER_MINUTE in packages/shared.
+  "ratelimits": [
+    { "name": "LIMIT_FREE", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "LIMIT_PAID", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "LIMIT_PRO", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } },
+    { "name": "LIMIT_VIP", "namespace_id": "1004", "simple": { "limit": 90, "period": 60 } },
+    { "name": "LIMIT_PUBLIC", "namespace_id": "1005", "simple": { "limit": 60, "period": 60 } }
+  ],
+
+  "triggers": { "crons": ["0 3 * * *"] },
+
+  "vars": {
+    "ENVIRONMENT": "development",
+    "API_URL": "http://localhost:8787",
+    "ADMIN_ORIGINS": "http://localhost:5173",
+    "TRANSLATION_PROVIDER": "mock",
+    "APP_SCHEME": "translator"
+  },
+
+  "env": {
+    "production": {
+      "name": "translator-api",
+      "workers_dev": false,
+      "vars": {
+        "ENVIRONMENT": "production",
+        // Set these to your real domains before the first deploy.
+        "API_URL": "https://api.example.com",
+        "ADMIN_ORIGINS": "https://admin.example.com",
+        "TRANSLATION_PROVIDER": "google",
+        "APP_SCHEME": "translator"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "translator",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "ratelimits": [
+        { "name": "LIMIT_FREE", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+        { "name": "LIMIT_PAID", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+        { "name": "LIMIT_PRO", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } },
+        { "name": "LIMIT_VIP", "namespace_id": "1004", "simple": { "limit": 90, "period": 60 } },
+        { "name": "LIMIT_PUBLIC", "namespace_id": "1005", "simple": { "limit": 60, "period": 60 } }
+      ],
+      "triggers": { "crons": ["0 3 * * *"] }
+    }
+  }
+}
