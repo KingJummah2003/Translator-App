@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { unstable_getMaterialSymbolSourceAsync } from 'expo-symbols';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { AppState, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppLock } from '@/components/AppLock';
@@ -15,7 +15,7 @@ import { authClient } from '@/lib/auth';
 import { directionReloadPending, t, useReloadOnLanguageChange } from '@/lib/i18n';
 import { configurePurchases, identify } from '@/lib/purchases';
 import { loadPersisted, setState, useAppState } from '@/lib/store';
-import { refreshDownloadedModels, refreshEntitlements } from '@/lib/translator';
+import { refreshDownloadedModels, refreshEntitlements, refreshEntitlementsIfStale } from '@/lib/translator';
 import { iconSize, palette, radius, useColors, useIsDark } from '@/theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -93,6 +93,15 @@ export default function RootLayout() {
     void identify(userId);
     if (userId) void refreshEntitlements();
     else setState({ entitlements: null });
+  }, [userId]);
+
+  // Back from the background: the balance may have changed elsewhere in the meantime.
+  useEffect(() => {
+    if (!userId) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') refreshEntitlementsIfStale(30_000);
+    });
+    return () => sub.remove();
   }, [userId]);
 
   // Android shows the root view during blank frames and transitions. The window background is

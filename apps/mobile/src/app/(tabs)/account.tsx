@@ -1,10 +1,10 @@
 import Constants from 'expo-constants';
 import { File, Paths } from 'expo-file-system';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import * as WebBrowser from 'expo-web-browser';
-import { useEffect, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useState, type ComponentProps } from 'react';
 import { Alert, Linking, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import type { Entitlements } from '@translator/shared';
@@ -27,7 +27,7 @@ import { errorActionLabel, errorCode, toAppError, type ErrorAction } from '@/lib
 import { formatDate, formatNumber, t, tn, type StringKey } from '@/lib/i18n';
 import { manageSubscriptionsUrl, restore } from '@/lib/purchases';
 import { resetPreferences, setState, updateSettings, useAppState } from '@/lib/store';
-import { refreshEntitlements } from '@/lib/translator';
+import { refreshEntitlements, refreshEntitlementsIfStale } from '@/lib/translator';
 import { radius, space, useColors } from '@/theme';
 
 const TIER_LABEL: Record<Entitlements['tier'], StringKey> = {
@@ -66,6 +66,12 @@ export default function AccountScreen() {
   const downloaded = useAppState((s) => s.downloadedModels);
   const [busy, setBusy] = useState<Action | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (session) refreshEntitlementsIfStale(5_000);
+    }, [session]),
+  );
 
   useEffect(() => {
     if (!notice || notice.tone === 'danger' || notice.tone === 'warning') return;

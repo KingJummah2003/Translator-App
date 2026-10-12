@@ -397,7 +397,20 @@ export async function deleteModel(language: string): Promise<void> {
 /* ------------------------------------------------------------------ entitlements */
 
 /** Never rejects: on failure the cached entitlements stay (cleared only on a 401). */
+let lastEntitlementsFetch = 0;
+
+/**
+ * Re-reads the balance unless it was fetched within `maxAgeMs`. Credits can change outside
+ * the app (a purchase on another device, a support grant, the weekly VIP reset), so screens
+ * that show the balance call this when they come into view and when the app returns.
+ */
+export function refreshEntitlementsIfStale(maxAgeMs = 15_000): void {
+  if (Date.now() - lastEntitlementsFetch < maxAgeMs) return;
+  void refreshEntitlements();
+}
+
 export async function refreshEntitlements(): Promise<Entitlements | null> {
+  lastEntitlementsFetch = Date.now();
   try {
     const e = await apiJson<Entitlements>('/v1/me/entitlements');
     setState({ entitlements: e });

@@ -62,7 +62,9 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "doctor": "expo-doctor",
-    "check:native": "node scripts/check-permissions.mjs"
+    "check:native": "node scripts/check-permissions.mjs",
+    "ios:personal": "PERSONAL_TEAM=1 expo run:ios",
+    "start:personal": "PERSONAL_TEAM=1 expo start --dev-client"
   },
   "private": true
 }
