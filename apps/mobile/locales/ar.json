@@ -1,0 +1,12 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "المترجم",
+    "NSCameraUsageDescription": "تُستخدم الكاميرا لقراءة النصوص في اللافتات وقوائم الطعام والمستندات لترجمتها.",
+    "NSMicrophoneUsageDescription": "يُستخدم الميكروفون عندما تتحدث بشيء تريد ترجمته.",
+    "NSSpeechRecognitionUsageDescription": "يحوّل التعرّف على الكلام ما تقوله إلى نص لترجمته، ويجري ذلك على جهازك متى أمكن.",
+    "NSFaceIDUsageDescription": "يُستخدم Face ID لفتح المترجم عند تفعيل قفل التطبيق، حتى لا يرى ترجماتك أحد غيرك."
+  },
+  "android": {
+    "app_name": "المترجم"
+  }
+}
