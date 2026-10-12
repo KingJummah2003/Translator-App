@@ -2,7 +2,7 @@ import { File, Paths } from 'expo-file-system';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
-import { buildDocx, getLanguage, isRtl, pdfTextToParagraphs, translateProtected } from '@translator/shared';
+import { buildDocx, getLanguage, isRtl, pdfTextToParagraphs, translateEnhanced, translateProtected } from '@translator/shared';
 import { TranslatorNative, translationAvailable } from 'translator-native';
 import { Text } from '@/components/Text';
 import { space, useColors } from '@/theme';
@@ -22,6 +22,20 @@ interface Job {
   /** A PDF in the app's files folder to read first (tests the PDF path too). */
   pdf?: string;
   deleteModelsAfter?: boolean;
+  /** Also translate every segment through the English pre-editing pipeline (A/B comparison). */
+  compareEnhanced?: boolean;
+}
+
+interface Item {
+  id: string;
+  source: string;
+  forward: string;
+  back: string;
+  forwardMs: number;
+  backMs: number;
+  forwardEnh?: string;
+  backEnh?: string;
+  forwardEnhMs?: number;
 }
 
 export default function BatchHarness() {
@@ -76,13 +90,22 @@ async function run(jobName: string, log: (l: string) => void) {
       const dl = Date.now();
       await withTimeout(TranslatorNative.downloadModel(lang, false), 180_000, 'model download timed out');
       const downloadMs = Date.now() - dl;
-      const items = [];
+      const items: Item[] = [];
       for (const s of segments) {
         const a = Date.now();
         const forward = await translateProtected(s.text, (t) => TranslatorNative.translate(t, 'en', lang));
         const b = Date.now();
         const back = await translateProtected(forward, (t) => TranslatorNative.translate(t, lang, 'en'));
-        items.push({ id: s.id, source: s.text, forward, back, forwardMs: b - a, backMs: Date.now() - b });
+        const item: Item = { id: s.id, source: s.text, forward, back, forwardMs: b - a, backMs: Date.now() - b };
+        if (job.compareEnhanced) {
+          const c = Date.now();
+          const enhanced = await translateEnhanced(s.text, 'en', lang, (t) => TranslatorNative.translate(t, 'en', lang));
+          const d = Date.now();
+          item.forwardEnh = enhanced;
+          item.backEnh = await translateProtected(enhanced, (t) => TranslatorNative.translate(t, lang, 'en'));
+          item.forwardEnhMs = d - c;
+        }
+        items.push(item);
       }
       const detected = await TranslatorNative.identifyLanguage(items.map((i) => i.forward).join(' ').slice(0, 500));
       write(outName, { lang, downloadMs, detected, items });

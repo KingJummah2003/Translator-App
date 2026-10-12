@@ -5,3 +5,4 @@ export * from './documents';
 export * from './protect';
 export * from './dictionary';
 export * from './quality';
+export * from './preedit';

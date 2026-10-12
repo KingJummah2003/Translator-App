@@ -6,6 +6,7 @@
 // device (tests the PDF path too). Results (<jobId>-<lang>.json and .docx) are copied to
 // <outDir>. Languages default to every offline language. Re-running resumes.
 // Several inputs can be combined with '+': corpus.json+cv.pdf
+// COMPARE=1 also runs each segment through the English pre-editing pipeline (forwardEnh/backEnh).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { OFFLINE_LANGUAGE_CODES } from '../../../packages/shared/src/languages.ts';
@@ -20,7 +21,7 @@ const languages = langArg ? langArg.split(',') : OFFLINE_LANGUAGE_CODES.filter((
 mkdirSync(outDir, { recursive: true });
 
 // <input> may list several files separated by '+', e.g. corpus.json+cv.pdf
-const job = { id: jobId, languages, deleteModelsAfter: true, segments: [] };
+const job = { id: jobId, languages, deleteModelsAfter: true, compareEnhanced: process.env.COMPARE === '1', segments: [] };
 for (const part of input.split('+')) {
   if (part.endsWith('.pdf')) {
     writeAppFile(`files/${basename(part)}`, readFileSync(part));
