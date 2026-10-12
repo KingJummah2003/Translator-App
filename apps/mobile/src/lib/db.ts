@@ -1,4 +1,5 @@
 import * as Crypto from 'expo-crypto';
+import { File } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 
@@ -8,14 +9,16 @@ import * as SQLite from 'expo-sqlite';
  * and the dictionary cache stay on this phone and are never uploaded.
  */
 
+const DB_NAME = 'translator.db';
 const KEY_NAME = 'translator.db.key';
 const SECURE = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let wasReset = false;
 
 async function databaseKey(): Promise<string> {
   let key = await SecureStore.getItemAsync(KEY_NAME, SECURE);
-  if (!key) {
+  if (!key || !/^[0-9a-f]{64}$/.test(key)) {
     const bytes = Crypto.getRandomBytes(32);
     key = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
     await SecureStore.setItemAsync(KEY_NAME, key, SECURE);
@@ -39,10 +42,51 @@ const MIGRATIONS: string[] = [
    );`,
 ];
 
-async function open(): Promise<SQLite.SQLiteDatabase> {
-  const db = await SQLite.openDatabaseAsync('translator.db');
+/**
+ * True for errors that mean the file can never be read with the key we hold: the key and
+ * file got out of sync (an iCloud/Google restore brings the file back but not the
+ * this-device-only key, or the Keystore was reset), or the file is damaged.
+ */
+export function isUnreadableDatabaseError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /not a database|NOTADB|file is encrypted|malformed|SQLITE_CORRUPT|code:? ?(26|11)\b/i.test(message);
+}
+
+async function openKeyed(key: string): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync(DB_NAME);
   // The key must be the first statement on a SQLCipher connection. Hex keys skip PBKDF2.
-  await db.execAsync(`PRAGMA key = "x'${await databaseKey()}'"`);
+  await db.execAsync(`PRAGMA key = "x'${key}'"`);
+  return db;
+}
+
+/** Deletes the database and its WAL side files. A stale WAL would otherwise be replayed into the new file. */
+async function deleteDatabaseFiles(path: string): Promise<void> {
+  await SQLite.deleteDatabaseAsync(DB_NAME).catch(() => {});
+  for (const suffix of ['-wal', '-shm', '-journal']) {
+    try {
+      const file = new File(`file://${encodeURI(path + suffix)}`);
+      if (file.exists) file.delete();
+    } catch {
+      // Not there, or already gone.
+    }
+  }
+}
+
+async function open(): Promise<SQLite.SQLiteDatabase> {
+  const key = await databaseKey();
+  let db = await openKeyed(key);
+  try {
+    // The first real read is where a wrong key or a damaged file shows up.
+    await db.getFirstAsync('SELECT count(*) FROM sqlite_master');
+  } catch (err) {
+    if (!isUnreadableDatabaseError(err)) throw err;
+    // Only local history, settings and the dictionary cache are lost; the app keeps working.
+    const path = db.databasePath;
+    await db.closeAsync().catch(() => {});
+    await deleteDatabaseFiles(path);
+    wasReset = true;
+    db = await openKeyed(key);
+  }
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   let version = row?.user_version ?? 0;
@@ -64,6 +108,11 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
     throw err;
   });
   return dbPromise;
+}
+
+/** True when the local database could not be read at launch and was recreated empty. */
+export function wasDatabaseReset(): boolean {
+  return wasReset;
 }
 
 /* ------------------------------------------------------------------ key-value */
@@ -97,11 +146,36 @@ export interface HistoryItem {
 }
 
 const HISTORY_LIMIT = 500;
+/** How long a newer version of the same phrase replaces the last entry instead of adding one. */
+const REVISE_WINDOW_MS = 2 * 60_000;
 
-export async function addHistory(item: Omit<HistoryItem, 'id' | 'created_at'>): Promise<void> {
+export async function addHistory(
+  item: Omit<HistoryItem, 'id' | 'created_at'>,
+  opts: { revise?: boolean } = {},
+): Promise<void> {
+  if (!item.input.trim() || !item.output.trim() || item.source === item.target) return;
   const db = await getDb();
-  const last = await db.getFirstAsync<{ input: string; target: string }>('SELECT input, target FROM history ORDER BY id DESC LIMIT 1');
-  if (last && last.input === item.input && last.target === item.target) return;
+  const last = await db.getFirstAsync<Pick<HistoryItem, 'id' | 'source' | 'target' | 'input' | 'created_at'>>(
+    'SELECT id, source, target, input, created_at FROM history ORDER BY id DESC LIMIT 1',
+  );
+  if (last && last.target === item.target) {
+    if (last.input === item.input) return;
+    // While typing, "Where is" then "Where is the pharmacy?" is one phrase being written.
+    const sameSource = last.source === item.source || last.source === 'auto' || item.source === 'auto';
+    const continues = item.input.startsWith(last.input) || last.input.startsWith(item.input);
+    if (opts.revise && sameSource && continues && Date.now() - last.created_at < REVISE_WINDOW_MS) {
+      await db.runAsync(
+        'UPDATE history SET source = ?, input = ?, output = ?, engine = ?, created_at = ? WHERE id = ?',
+        item.source,
+        item.input,
+        item.output,
+        item.engine,
+        Date.now(),
+        last.id,
+      );
+      return;
+    }
+  }
   await db.runAsync(
     'INSERT INTO history (source, target, input, output, engine, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     item.source,
@@ -119,6 +193,11 @@ export async function listHistory(limit = 50): Promise<HistoryItem[]> {
   return db.getAllAsync<HistoryItem>('SELECT * FROM history ORDER BY id DESC LIMIT ?', limit);
 }
 
+export async function deleteHistoryItem(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM history WHERE id = ?', id);
+}
+
 export async function clearHistory(): Promise<void> {
   const db = await getDb();
   await db.execAsync('DELETE FROM history; VACUUM;');
@@ -129,7 +208,12 @@ export async function clearHistory(): Promise<void> {
 export async function getCachedEntry<T>(word: string, lang: string, ui: string): Promise<T | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ data: string }>('SELECT data FROM dictionary WHERE word = ? AND lang = ? AND ui = ?', word, lang, ui);
-  return row ? (JSON.parse(row.data) as T) : null;
+  if (!row) return null;
+  try {
+    return JSON.parse(row.data) as T;
+  } catch {
+    return null;
+  }
 }
 
 export async function cacheEntry(word: string, lang: string, ui: string, data: unknown): Promise<void> {

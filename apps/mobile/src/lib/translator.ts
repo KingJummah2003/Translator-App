@@ -1,6 +1,7 @@
 import {
   COSTS,
   getLanguage,
+  translateProtected,
   type Entitlements,
   type OcrResponse,
   type TranslateResponse,
@@ -92,7 +93,7 @@ export async function translateText(
     } else {
       const missing = requiredModels(from, target).filter((c) => !getState().downloadedModels.includes(c));
       if (missing.length) throw new ModelMissingError(missing);
-      result = { text: await TranslatorNative.translate(input, from, target), engine: 'offline', detectedSource: detected, charged: 0 };
+      result = { text: await translateOffline(input, from, target), engine: 'offline', detectedSource: detected, charged: 0 };
     }
   } else {
     const res = await apiJson<TranslateResponse>('/v1/translate', { method: 'POST', json: { text: input, source, target } });
@@ -110,6 +111,14 @@ export async function translateText(
     }).catch(() => {});
   }
   return result;
+}
+
+/**
+ * On-device translation with emails, web addresses and phone numbers shielded from the
+ * model (which otherwise mangles them).
+ */
+export function translateOffline(text: string, from: string, to: string): Promise<string> {
+  return translateProtected(text, (t) => TranslatorNative.translate(t, from, to));
 }
 
 export function cloudCost(text: string): number {

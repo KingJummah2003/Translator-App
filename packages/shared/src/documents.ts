@@ -181,6 +181,101 @@ function applyEdits(source: string, edits: { start: number; end: number; value: 
   return out + source.slice(cursor);
 }
 
+/* ------------------------------------------------------------------ new Word files */
+
+export interface DocxParagraph {
+  text: string;
+  kind?: 'heading' | 'paragraph' | 'bullet';
+}
+
+/**
+ * Builds a minimal, valid Word document from paragraphs. Used for PDF translations, where
+ * the original layout can't be edited, so the translated text is delivered as Word.
+ */
+export function buildDocx(paragraphs: DocxParagraph[], options: { rtl?: boolean; title?: string } = {}): Uint8Array {
+  const rtl = options.rtl ? '<w:bidi/>' : '';
+  const runRtl = options.rtl ? '<w:rtl/>' : '';
+  const body = paragraphs
+    .map((p) => {
+      const style = p.kind === 'heading' ? '<w:b/><w:sz w:val="32"/>' : '';
+      const indent = p.kind === 'bullet' ? '<w:ind w:start="360" w:hanging="360"/>' : '';
+      const text = p.kind === 'bullet' ? `• ${p.text}` : p.text;
+      const runs = text
+        .split('\n')
+        .map((line, i) => `${i ? '<w:r><w:br/></w:r>' : ''}<w:r><w:rPr>${style}${runRtl}</w:rPr><w:t xml:space="preserve">${encodeXml(line)}</w:t></w:r>`)
+        .join('');
+      return `<w:p><w:pPr>${rtl}<w:spacing w:after="160"/>${indent}</w:pPr>${runs}</w:p>`;
+    })
+    .join('');
+  const document =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    `<w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+  const files: Zippable = {
+    '[Content_Types].xml': strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
+        '</Types>',
+    ),
+    '_rels/.rels': strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>' +
+        '</Relationships>',
+    ),
+    'docProps/core.xml': strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">' +
+        `<dc:title>${encodeXml(options.title ?? 'Translation')}</dc:title></cp:coreProperties>`,
+    ),
+    'word/document.xml': strToU8(document),
+  };
+  return zipSync(files, { level: 6 });
+}
+
+/**
+ * Turns text extracted from a PDF page into paragraphs: blank lines separate paragraphs,
+ * short lines that look like headings stay on their own, and wrapped lines are joined.
+ */
+export function pdfTextToParagraphs(pages: string[]): DocxParagraph[] {
+  const out: DocxParagraph[] = [];
+  // OCR often reads a bullet glyph as '.', '·' or 'e', so those count too before a capital letter.
+  const bulletMark = /^(?:[•\-–*▪●◦]\s+|[.·]\s+(?=\p{Lu})|e\s+(?=\p{Lu}))/u;
+  const endsSentence = (t: string) => /[.!?:;。؟!…)"'”]$/.test(t);
+  const isHeading = (line: string, alone: boolean) =>
+    line.length <= 40 && !/[.,;:!?،؛]$/.test(line) && (/^[\p{Lu}\d\s&/+-]+$/u.test(line) || alone);
+  for (const page of pages) {
+    const lines = page.replace(/\r/g, '').split('\n').map((l) => l.trim());
+    let blankBefore = true;
+    lines.forEach((line, i) => {
+      if (!line) {
+        blankBefore = true;
+        return;
+      }
+      const last = out[out.length - 1];
+      const nextBlank = !lines[i + 1];
+      if (bulletMark.test(line)) {
+        out.push({ text: line.replace(bulletMark, ''), kind: 'bullet' });
+      } else if (isHeading(line, blankBefore && nextBlank) && !/^\p{Ll}/u.test(line)) {
+        out.push({ text: line, kind: 'heading' });
+      } else if (last && last.kind !== 'heading' && (!endsSentence(last.text) || /^\p{Ll}/u.test(line)) && !(blankBefore && /^\p{Lu}/u.test(line) && endsSentence(last.text))) {
+        // A wrapped line (OCR and PDF text often split sentences and bullets across lines,
+        // sometimes with a blank line in between): continue the previous paragraph.
+        last.text = `${last.text} ${line}`;
+      } else {
+        out.push({ text: line, kind: 'paragraph' });
+      }
+      blankBefore = false;
+    });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ helpers */
 
 export function extractDocument(type: 'txt' | 'docx', bytes: Uint8Array): ExtractedDocument {

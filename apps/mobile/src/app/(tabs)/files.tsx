@@ -5,8 +5,8 @@ import { router } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { COSTS, REQUEST_LIMITS, extractDocument, isRtl, totalChars, type ExtractedDocument } from '@translator/shared';
-import { TranslatorNative } from 'translator-native';
+import { COSTS, REQUEST_LIMITS, buildDocx, extractDocument, extractText, isRtl, pdfTextToParagraphs, totalChars, type ExtractedDocument } from '@translator/shared';
+import { TranslatorNative, textRecognitionAvailable } from 'translator-native';
 import { Banner } from '@/components/Banner';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
@@ -18,7 +18,7 @@ import { ApiError, api } from '@/lib/api';
 import { authClient } from '@/lib/auth';
 import { t } from '@/lib/i18n';
 import { getState, useAppState } from '@/lib/store';
-import { detectLanguage, downloadModels, planRoute, refreshEntitlements } from '@/lib/translator';
+import { detectLanguage, downloadModels, planRoute, refreshEntitlements, translateOffline } from '@/lib/translator';
 import { radius, space, useColors } from '@/theme';
 
 interface Picked {
@@ -28,6 +28,8 @@ interface Picked {
   type: 'txt' | 'docx' | 'pdf';
   doc: ExtractedDocument | null;
   chars: number;
+  /** PDFs are delivered as Word files: the original layout can't be rewritten. */
+  outputType: 'txt' | 'docx';
 }
 
 const MIME = {
@@ -62,17 +64,33 @@ export default function FilesScreen() {
     const ext = a.name.toLowerCase().split('.').pop();
     if (ext !== 'txt' && ext !== 'docx' && ext !== 'pdf') return setError(t('filesHint'));
     if ((a.size ?? 0) > REQUEST_LIMITS.maxDocumentBytes) return setError(t('fileTooBig'));
-    if (ext === 'pdf') {
-      setFile({ uri: a.uri, name: a.name, size: a.size ?? 0, type: 'pdf', doc: null, chars: 0 });
-      return setError(t('pdfSoon'));
-    }
     try {
-      const bytes = await new File(a.uri).bytes();
-      const doc = extractDocument(ext, bytes);
-      setFile({ uri: a.uri, name: a.name, size: a.size ?? bytes.length, type: ext, doc, chars: totalChars(doc.segments) });
+      let doc: ExtractedDocument;
+      if (ext === 'pdf') {
+        if (!textRecognitionAvailable) return setError(t('pdfUnavailable'));
+        // Read on the phone: the PDF itself is never uploaded.
+        setProgress(0);
+        const pdf = await TranslatorNative.extractPdfText(a.uri, source === 'auto' ? [] : [source], 50);
+        setProgress(null);
+        const paragraphs = pdfTextToParagraphs(pdf.pages);
+        if (!paragraphs.length) return setError(t('pdfNoText'));
+        doc = {
+          segments: paragraphs.map((p) => p.text),
+          rebuild: (translations, options) =>
+            buildDocx(
+              paragraphs.map((p, i) => ({ ...p, text: translations[i] ?? '' })),
+              { rtl: options?.rtl, title: a.name },
+            ),
+        };
+      } else {
+        doc = extractDocument(ext, await new File(a.uri).bytes());
+      }
+      setFile({ uri: a.uri, name: a.name, size: a.size ?? 0, type: ext, doc, chars: totalChars(doc.segments), outputType: ext === 'txt' ? 'txt' : 'docx' });
       if (source === 'auto') setDetected(await detectLanguage(doc.segments.slice(0, 5).join('\n')));
-    } catch {
-      setError(t('error'));
+    } catch (e) {
+      setProgress(null);
+      const code = (e as Error).message;
+      setError(code.includes('LOCKED_PDF') ? t('pdfLocked') : code.includes('too large or complex') ? t('fileTooBig') : t('error'));
     }
   }
 
@@ -83,7 +101,7 @@ export default function FilesScreen() {
     try {
       const out: string[] = [];
       for (let i = 0; i < file.doc.segments.length; i++) {
-        out.push(await TranslatorNative.translate(file.doc.segments[i]!, from, target));
+        out.push(await translateOffline(file.doc.segments[i]!, from, target));
         if (i % 5 === 0) setProgress(i / file.doc.segments.length);
       }
       save(file.doc.rebuild(out, { rtl: isRtl(target) }));
@@ -95,16 +113,30 @@ export default function FilesScreen() {
   }
 
   async function translateInCloud() {
-    if (!file || file.type === 'pdf') return;
+    if (!file?.doc) return;
     setError(null);
     setProgress(0.5);
     try {
       const form = new FormData();
-      form.append('file', { uri: file.uri, name: file.name, type: MIME[file.type] } as unknown as Blob);
+      if (file.type === 'pdf') {
+        // Only the extracted text is sent, as a plain-text file; the PDF stays on the phone.
+        const textFile = new File(Paths.cache, 'pdf-text.txt');
+        textFile.create({ overwrite: true });
+        textFile.write(file.doc.segments.join('\n\n'));
+        form.append('file', { uri: textFile.uri, name: 'document.txt', type: MIME.txt } as unknown as Blob);
+      } else {
+        form.append('file', { uri: file.uri, name: file.name, type: MIME[file.type] } as unknown as Blob);
+      }
       form.append('source', source);
       form.append('target', target);
       const res = await api('/v1/documents', { method: 'POST', body: form });
-      save(new Uint8Array(await res.arrayBuffer()));
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (file.type === 'pdf') {
+        const translated = extractText(bytes).segments;
+        save(file.doc.rebuild(translated, { rtl: isRtl(target) }));
+      } else {
+        save(bytes);
+      }
       void refreshEntitlements();
     } catch (e) {
       setError(e instanceof ApiError && e.code === 'insufficient_credits' ? t('notEnoughCredits') : e instanceof Error ? e.message : t('error'));
@@ -115,7 +147,7 @@ export default function FilesScreen() {
 
   function save(bytes: Uint8Array) {
     if (!file) return;
-    const name = `${file.name.replace(/\.[^.]+$/, '')}.${target}.${file.type}`;
+    const name = `${file.name.replace(/\.[^.]+$/, '')}.${target}.${file.outputType}`;
     const out = new File(Paths.cache, name);
     out.create({ overwrite: true });
     out.write(bytes);
@@ -203,7 +235,7 @@ export default function FilesScreen() {
           <Button
             title={t('saveOrShare')}
             icon="share"
-            onPress={() => void Sharing.shareAsync(output.uri, { mimeType: MIME[file!.type as 'txt' | 'docx'], dialogTitle: output.name })}
+            onPress={() => void Sharing.shareAsync(output.uri, { mimeType: MIME[file!.outputType], dialogTitle: output.name })}
           />
           <Button title={t('chooseFile')} kind="ghost" onPress={() => void pick()} />
         </Card>

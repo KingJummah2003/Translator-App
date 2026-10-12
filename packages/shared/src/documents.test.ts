@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { DocumentTooComplexError, batchSegments, extractDocx, extractText, splitLong } from './documents';
+import { DocumentTooComplexError, batchSegments, buildDocx, extractDocx, extractText, pdfTextToParagraphs, splitLong } from './documents';
 
 function makeDocx(body: string): Uint8Array {
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`;
@@ -94,5 +94,56 @@ describe('limits', () => {
   it('hard-splits text without spaces', () => {
     const parts = splitLong('x'.repeat(250), 100);
     expect(parts.map((p) => p.length)).toEqual([100, 100, 50]);
+  });
+});
+
+describe('buildDocx', () => {
+  it('creates a Word file that our own reader can open, with RTL paragraphs', () => {
+    const bytes = buildDocx(
+      [
+        { text: 'السيرة الذاتية', kind: 'heading' },
+        { text: 'مهندس برمجيات <محترف>', kind: 'paragraph' },
+        { text: 'خبرة', kind: 'bullet' },
+      ],
+      { rtl: true },
+    );
+    const files = unzipSync(bytes);
+    expect(Object.keys(files).sort()).toEqual(['[Content_Types].xml', '_rels/.rels', 'docProps/core.xml', 'word/document.xml']);
+    const xml = strFromU8(files['word/document.xml']!);
+    expect(xml).toContain('<w:bidi/>');
+    expect(xml).toContain('&lt;محترف&gt;');
+    expect(extractDocx(bytes).segments).toEqual(['السيرة الذاتية', 'مهندس برمجيات <محترف>', '• خبرة']);
+  });
+});
+
+describe('pdfTextToParagraphs', () => {
+  it('joins wrapped lines, keeps headings and bullets', () => {
+    const pages = ['EXPERIENCE\nSoftware engineer at a bank, building\nmobile apps and payment systems.\n\n• Led a team of five\n• Shipped weekly'];
+    expect(pdfTextToParagraphs(pages)).toEqual([
+      { text: 'EXPERIENCE', kind: 'heading' },
+      { text: 'Software engineer at a bank, building mobile apps and payment systems.', kind: 'paragraph' },
+      { text: 'Led a team of five', kind: 'bullet' },
+      { text: 'Shipped weekly', kind: 'bullet' },
+    ]);
+  });
+});
+
+describe('pdfTextToParagraphs continuation', () => {
+  it('joins bullet lines that wrap, even across an OCR block break', () => {
+    const pages = ['EXPERIENCE\n• Monitor banking services across multiple dashboards, covering service\n\nplatforms, proxies and portals.\n• Run end of day processing.'];
+    expect(pdfTextToParagraphs(pages)).toEqual([
+      { text: 'EXPERIENCE', kind: 'heading' },
+      { text: 'Monitor banking services across multiple dashboards, covering service platforms, proxies and portals.', kind: 'bullet' },
+      { text: 'Run end of day processing.', kind: 'bullet' },
+    ]);
+  });
+});
+
+describe('pdfTextToParagraphs OCR bullets', () => {
+  it('treats a bullet read as "." or "·" as a bullet', () => {
+    expect(pdfTextToParagraphs(['. Operate scheduled jobs.\n· Run backups.'])).toEqual([
+      { text: 'Operate scheduled jobs.', kind: 'bullet' },
+      { text: 'Run backups.', kind: 'bullet' },
+    ]);
   });
 });

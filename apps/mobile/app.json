@@ -156,7 +156,7 @@
         "expo-camera",
         {
           "cameraPermission": "The camera is used to read text in signs, menus and documents so it can be translated.",
-          "microphonePermission": false,
+          "microphonePermission": "The microphone is used when you speak something to translate.",
           "recordAudioAndroid": false
         }
       ],

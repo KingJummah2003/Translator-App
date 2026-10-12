@@ -1,6 +1,10 @@
 package expo.modules.translatornative
 
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.languageid.LanguageIdentification
@@ -124,6 +128,46 @@ class TranslatorNativeModule : Module() {
           recognizer.close()
           promise.reject(CodedException("OCR_FAILED", it.message ?: "Text recognition failed", it))
         }
+    }
+
+    // Android has no PDF text API: each page is rendered and read with on-device OCR.
+    AsyncFunction("extractPdfText") { uri: String, languages: List<String>, maxPages: Int, promise: Promise ->
+      val context = appContext.reactContext
+      if (context == null) {
+        promise.reject(CodedException("NO_CONTEXT", "No Android context", null))
+        return@AsyncFunction
+      }
+      Thread {
+        try {
+          val descriptor = context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")
+            ?: throw IllegalStateException("BAD_PDF")
+          descriptor.use { fd ->
+            PdfRenderer(fd).use { renderer ->
+              val recognizer = recognizerFor(languages)
+              val count = minOf(renderer.pageCount, maxOf(1, maxPages))
+              val pages = ArrayList<String>(count)
+              for (i in 0 until count) {
+                renderer.openPage(i).use { page ->
+                  // About 150 dpi: sharp enough for OCR, small enough for memory.
+                  val scale = 150f / 72f
+                  val bitmap = Bitmap.createBitmap((page.width * scale).toInt(), (page.height * scale).toInt(), Bitmap.Config.ARGB_8888)
+                  bitmap.eraseColor(Color.WHITE)
+                  page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                  val result = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)))
+                  pages.add(result.text)
+                  bitmap.recycle()
+                }
+              }
+              recognizer.close()
+              promise.resolve(mapOf("pages" to pages, "pageCount" to renderer.pageCount, "scannedPages" to count))
+            }
+          }
+        } catch (e: SecurityException) {
+          promise.reject(CodedException("LOCKED_PDF", "LOCKED_PDF", e))
+        } catch (e: Exception) {
+          promise.reject(CodedException("BAD_PDF", "BAD_PDF", e))
+        }
+      }.start()
     }
 
     OnDestroy {

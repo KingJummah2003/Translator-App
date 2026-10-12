@@ -37,3 +37,6 @@ GoogleService-Info.plist
 .idea/
 *.log
 coverage/
+
+# e2e screenshots and translation test output (may contain personal documents)
+apps/mobile/e2e/out/

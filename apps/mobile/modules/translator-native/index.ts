@@ -21,6 +21,14 @@ export interface RecognizedText {
   blocks: RecognizedBlock[];
 }
 
+export interface PdfText {
+  /** Text of each page, in order. */
+  pages: string[];
+  pageCount: number;
+  /** Pages read with OCR because they had no text layer (all pages on Android). */
+  scannedPages: number;
+}
+
 interface NativeModule {
   isTranslationAvailable(): boolean;
   isTextRecognitionAvailable(): boolean;
@@ -32,6 +40,7 @@ interface NativeModule {
   getDownloadedModels(): Promise<string[]>;
   identifyLanguage(text: string): Promise<string>;
   recognizeText(uri: string, languages: string[]): Promise<RecognizedText>;
+  extractPdfText(uri: string, languages: string[], maxPages: number): Promise<PdfText>;
   addListener(event: 'onDownloadProgress', listener: (e: { language: string; progress: number }) => void): EventSubscription;
 }
 
@@ -53,6 +62,8 @@ export const TranslatorNative = {
   /** BCP-47 code, or 'und' when unsure. */
   identifyLanguage: async (text: string) => (native && translationAvailable ? native.identifyLanguage(text) : 'und'),
   recognizeText: (uri: string, languages: string[]) => required().recognizeText(uri, languages),
+  /** Reads a PDF on the device (nothing is uploaded). Errors: BAD_PDF, LOCKED_PDF. */
+  extractPdfText: (uri: string, languages: string[] = [], maxPages = 50) => required().extractPdfText(uri, languages, maxPages),
   supportedRecognitionLanguages: () => native?.supportedRecognitionLanguages() ?? [],
   onDownloadProgress(listener: (e: { language: string; progress: number }) => void) {
     return native?.addListener('onDownloadProgress', listener) ?? { remove() {} };
