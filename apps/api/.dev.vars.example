@@ -15,3 +15,6 @@ ADMIN_DEV_BYPASS=1
 # EMAIL_FROM=Translator <no-reply@example.com>
 # ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
 # ACCESS_AUD=
+
+# Optional: real translations in development without a Google key (free, dev only)
+# TRANSLATION_PROVIDER=mymemory

@@ -14,7 +14,8 @@ export interface Env {
   API_URL: string;
   /** Origins allowed to call the API from a browser (the admin portal). Comma separated. */
   ADMIN_ORIGINS: string;
-  TRANSLATION_PROVIDER: 'google' | 'mock';
+  /** 'mymemory' is a free dev-only service so the iOS Simulator gets real translations. */
+  TRANSLATION_PROVIDER: 'google' | 'mock' | 'mymemory';
   /** Mobile app deep-link scheme used by Better Auth redirects. */
   APP_SCHEME: string;
 
