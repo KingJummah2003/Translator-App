@@ -12,12 +12,21 @@ import MLKitTranslate
 /// On-device translation (Google ML Kit), language identification (ML Kit) and text
 /// recognition (Apple Vision, which also reads Arabic). Nothing here uses the network
 /// except the one-time language model downloads, which come from Google.
+///
+/// Errors reach JavaScript with a stable `code` (the same codes as on Android, see
+/// `TranslatorError`), so the app can show a localized message.
 public class TranslatorNativeModule: Module {
   #if !targetEnvironment(simulator)
   /// Guards `translators` and `downloads`: ML Kit calls back on threads of its choosing.
   private let lock = NSLock()
   private var translators: [String: Translator] = [:]
   private var downloads: [ObjectIdentifier: ModelDownload] = [:]
+
+  private func locked<T>(_ body: () throws -> T) rethrows -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return try body()
+  }
   #endif
 
   public func definition() -> ModuleDefinition {
@@ -38,7 +47,7 @@ public class TranslatorNativeModule: Module {
     }
 
     Function("supportedRecognitionLanguages") { () -> [String] in
-      return Self.visionLanguages()
+      return Self.visionLanguages
     }
 
     // URL schemes this build registered (CFBundleURLTypes). Google Sign-In aborts the app
@@ -50,7 +59,7 @@ public class TranslatorNativeModule: Module {
 
     AsyncFunction("translate") { (text: String, source: String, target: String) async throws -> String in
       #if targetEnvironment(simulator)
-      throw TranslatorError.unavailable
+      throw TranslatorError.unavailable()
       #else
       return try await self.translate(text: text, source: source, target: target)
       #endif
@@ -58,7 +67,7 @@ public class TranslatorNativeModule: Module {
 
     AsyncFunction("downloadModel") { (language: String, wifiOnly: Bool) async throws in
       #if targetEnvironment(simulator)
-      throw TranslatorError.unavailable
+      throw TranslatorError.unavailable()
       #else
       try await self.download(language: language, wifiOnly: wifiOnly)
       #endif
@@ -66,16 +75,20 @@ public class TranslatorNativeModule: Module {
 
     AsyncFunction("deleteModel") { (language: String) async throws in
       #if targetEnvironment(simulator)
-      throw TranslatorError.unavailable
+      throw TranslatorError.unavailable()
       #else
       try Self.requireSupported(language)
       let model = TranslateRemoteModel.translateRemoteModel(language: TranslateLanguage(rawValue: language))
-      try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+      let _: Void = try await awaitCallback { done in
         ModelManager.modelManager().deleteDownloadedModel(model) { error in
-          if let error { c.resume(throwing: error) } else { c.resume() }
+          if let error {
+            done(.failure(TranslatorError.make("DELETE_FAILED", language, cause: error)))
+          } else {
+            done(.success(()))
+          }
         }
       }
-      self.lock.withLock { self.translators = self.translators.filter { !Self.pair($0.key, uses: language) } }
+      self.locked { self.translators = self.translators.filter { !Self.pair($0.key, uses: language) } }
       #endif
     }
 
@@ -93,11 +106,12 @@ public class TranslatorNativeModule: Module {
       #else
       let identifier = LanguageIdentification.languageIdentification()
       // Unsure and failed both mean "und", as on Android.
-      return await withCheckedContinuation { c in
+      let code: String = (try? await awaitCallback { done in
         identifier.identifyLanguage(for: text) { code, error in
-          c.resume(returning: error == nil ? (code ?? "und") : "und")
+          done(.success(error == nil ? (code ?? "und") : "und"))
         }
-      }
+      }) ?? "und"
+      return code
       #endif
     }
 
@@ -113,7 +127,7 @@ public class TranslatorNativeModule: Module {
     OnDestroy {
       #if !targetEnvironment(simulator)
       // ML Kit keeps downloading in the background; only this module's listeners go away.
-      let pending: [ModelDownload] = self.lock.withLock {
+      let pending: [ModelDownload] = self.locked {
         let all = Array(self.downloads.values)
         self.downloads.removeAll()
         return all
@@ -131,7 +145,7 @@ public class TranslatorNativeModule: Module {
   /// ML Kit expects codes from its own list; reject anything else before it reaches ML Kit.
   private static func requireSupported(_ languages: String...) throws {
     if let unsupported = languages.first(where: { !translateLanguages.contains($0) }) {
-      throw TranslatorError.unsupportedLanguage(unsupported)
+      throw TranslatorError.make("UNSUPPORTED_LANGUAGE", unsupported)
     }
   }
 
@@ -145,19 +159,23 @@ public class TranslatorNativeModule: Module {
     let manager = ModelManager.modelManager()
     for lang in [source, target] {
       let model = TranslateRemoteModel.translateRemoteModel(language: TranslateLanguage(rawValue: lang))
-      if !manager.isModelDownloaded(model) { throw TranslatorError.modelMissing(lang) }
+      if !manager.isModelDownloaded(model) { throw TranslatorError.make("MODEL_MISSING", lang) }
     }
     let key = "\(source)>\(target)"
-    let translator: Translator = lock.withLock {
+    let translator: Translator = locked {
       if let cached = translators[key] { return cached }
       let options = TranslatorOptions(sourceLanguage: TranslateLanguage(rawValue: source), targetLanguage: TranslateLanguage(rawValue: target))
       let created = Translator.translator(options: options)
       translators[key] = created
       return created
     }
-    return try await withCheckedThrowingContinuation { c in
+    return try await awaitCallback { done in
       translator.translate(text) { result, error in
-        if let error { c.resume(throwing: error) } else { c.resume(returning: result ?? "") }
+        if let error {
+          done(.failure(TranslatorError.make("TRANSLATE_FAILED", cause: error)))
+        } else {
+          done(.success(result ?? ""))
+        }
       }
     }
   }
@@ -172,11 +190,11 @@ public class TranslatorNativeModule: Module {
     try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
       let job = ModelDownload(language: language, continuation: c)
       let id = ObjectIdentifier(job)
-      lock.withLock { downloads[id] = job }
+      locked { downloads[id] = job }
 
       let end: (Error?) -> Void = { [weak self] error in
         if let self {
-          self.lock.withLock { _ = self.downloads.removeValue(forKey: id) }
+          self.locked { _ = self.downloads.removeValue(forKey: id) }
           if error == nil { self.sendEvent("onDownloadProgress", ["language": language, "progress": 1.0]) }
         }
         job.finish(error)
@@ -191,7 +209,8 @@ public class TranslatorNativeModule: Module {
       })
       job.keep(token: NotificationCenter.default.addObserver(forName: .mlkitModelDownloadDidFail, object: nil, queue: nil) { note in
         if matches(note) {
-          end(note.userInfo?[ModelDownloadUserInfoKey.error.rawValue] as? Error ?? TranslatorError.downloadFailed(language))
+          let cause = note.userInfo?[ModelDownloadUserInfoKey.error.rawValue] as? Error
+          end(TranslatorError.downloadFailed(language, cause: cause))
         }
       })
       let progress = manager.download(model, conditions: conditions)
@@ -201,17 +220,20 @@ public class TranslatorNativeModule: Module {
           self?.sendEvent("onDownloadProgress", ["language": language, "progress": value])
         }
       })
+      // A download that finished in the meantime (another request for the same language)
+      // may never post a notification for this one.
+      if manager.isModelDownloaded(model) { end(nil) }
     }
   }
   #endif
 
   // MARK: - Text recognition (Apple Vision)
 
-  private static func visionLanguages() -> [String] {
+  private static let visionLanguages: [String] = {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     return (try? request.supportedRecognitionLanguages()) ?? []
-  }
+  }()
 
   private static func fileURL(_ uri: String) -> URL {
     if uri.hasPrefix("file://"), let url = URL(string: uri) { return url }
@@ -219,13 +241,13 @@ public class TranslatorNativeModule: Module {
   }
 
   private static func extractPdf(uri: String, languages: [String], maxPages: Int) async throws -> [String: Any] {
-    guard let document = PDFDocument(url: fileURL(uri)) else { throw TranslatorError.badPdf }
-    if document.isLocked { throw TranslatorError.lockedPdf }
+    guard let document = PDFDocument(url: fileURL(uri)) else { throw TranslatorError.make("BAD_PDF") }
+    if document.isLocked { throw TranslatorError.make("LOCKED_PDF") }
     let count = min(document.pageCount, max(1, maxPages))
     var pages: [String] = []
     var scanned = 0
     for index in 0..<count {
-      guard let page = document.page(at: index) else { continue }
+      guard let page = document.page(at: index) else { pages.append(""); continue }
       let text = page.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       if text.count > 20 {
         pages.append(text)
@@ -235,9 +257,10 @@ public class TranslatorNativeModule: Module {
       // before the next one, so a long scan does not pile up images.
       let cgImage: CGImage? = autoreleasepool { render(page) }
       guard let cgImage else { pages.append(""); continue }
-      let result = try await recognize(cgImage: cgImage, orientation: .up, languages: languages)
-      pages.append(result["text"] as? String ?? "")
-      scanned += 1
+      // One unreadable page should not lose the rest of the document.
+      let result = try? await recognize(cgImage: cgImage, orientation: .up, languages: languages)
+      pages.append(result?["text"] as? String ?? text)
+      if result != nil { scanned += 1 }
     }
     return ["pages": pages, "pageCount": document.pageCount, "scannedPages": scanned]
   }
@@ -246,7 +269,7 @@ public class TranslatorNativeModule: Module {
   private static func render(_ page: PDFPage) -> CGImage? {
     let bounds = page.bounds(for: .mediaBox)
     let longest = max(bounds.width, bounds.height)
-    guard longest > 0 else { return nil }
+    guard longest > 0, longest.isFinite else { return nil }
     let scale = min(2, 2200 / longest)
     let size = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
     return page.thumbnail(of: size, for: .mediaBox).cgImage
@@ -264,13 +287,13 @@ public class TranslatorNativeModule: Module {
     guard let source = CGImageSourceCreateWithURL(fileURL(uri) as CFURL, nil),
           let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     else {
-      throw TranslatorError.badImage
+      throw TranslatorError.make("BAD_IMAGE")
     }
     return try await recognize(cgImage: cgImage, orientation: .up, languages: languages)
   }
 
   private static func recognize(cgImage: CGImage, orientation: CGImagePropertyOrientation, languages: [String]) async throws -> [String: Any] {
-    let supported = visionLanguages()
+    let supported = visionLanguages
     // Match "ar" to "ar-SA", "zh" to "zh-Hans" and so on.
     let wanted = languages.flatMap { code in supported.filter { $0 == code || $0.hasPrefix(code + "-") } }
 
@@ -290,7 +313,7 @@ public class TranslatorNativeModule: Module {
         do {
           try VNImageRequestHandler(cgImage: cgImage, orientation: orientation).perform([request])
         } catch {
-          c.resume(throwing: error)
+          c.resume(throwing: TranslatorError.make("OCR_FAILED", cause: error))
           return
         }
         var blocks: [[String: Any]] = []
@@ -307,6 +330,35 @@ public class TranslatorNativeModule: Module {
         c.resume(returning: ["text": lines.joined(separator: "\n"), "blocks": blocks])
       }
     }
+  }
+}
+
+// MARK: - Helpers
+
+/// Resumes a continuation at most once. ML Kit calls back on threads of its choosing, and a
+/// checked continuation resumed twice terminates the app, so only the first result counts.
+private final class ResumeOnce<T>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<T, Error>?
+
+  init(_ continuation: CheckedContinuation<T, Error>) {
+    self.continuation = continuation
+  }
+
+  func resume(with result: Result<T, Error>) {
+    lock.lock()
+    let c = continuation
+    continuation = nil
+    lock.unlock()
+    c?.resume(with: result)
+  }
+}
+
+/// Bridges a completion-handler API to async/await, resuming exactly once.
+private func awaitCallback<T>(_ start: (@escaping (Result<T, Error>) -> Void) -> Void) async throws -> T {
+  return try await withCheckedThrowingContinuation { (c: CheckedContinuation<T, Error>) in
+    let once = ResumeOnce(c)
+    start { once.resume(with: $0) }
   }
 }
 
@@ -370,27 +422,21 @@ private final class ModelDownload: @unchecked Sendable {
 }
 #endif
 
-enum TranslatorError: LocalizedError, CustomStringConvertible {
-  case unavailable
-  case unsupportedLanguage(String)
-  case modelMissing(String)
-  case downloadFailed(String)
-  case badImage
-  case badPdf
-  case lockedPdf
-
-  var description: String {
-    switch self {
-    case .unavailable: return "ON_DEVICE_UNAVAILABLE"
-    case .unsupportedLanguage(let lang): return "UNSUPPORTED_LANGUAGE:\(lang)"
-    case .modelMissing(let lang): return "MODEL_MISSING:\(lang)"
-    case .downloadFailed(let lang): return "DOWNLOAD_FAILED:\(lang)"
-    case .badImage: return "BAD_IMAGE"
-    case .badPdf: return "BAD_PDF"
-    case .lockedPdf: return "LOCKED_PDF"
-    }
+/// Errors with a stable `code` for JavaScript; Android rejects with the same codes. The
+/// message keeps the "CODE:detail" form (e.g. "MODEL_MISSING:ar") so the detail survives.
+/// Codes: ON_DEVICE_UNAVAILABLE, UNSUPPORTED_LANGUAGE, MODEL_MISSING, TRANSLATE_FAILED,
+/// DOWNLOAD_FAILED, DELETE_FAILED, BAD_IMAGE, OCR_FAILED, BAD_PDF, LOCKED_PDF.
+enum TranslatorError {
+  static func make(_ code: String, _ detail: String? = nil, cause: Error? = nil) -> Exception {
+    let message = detail.map { "\(code):\($0)" } ?? code
+    return Exception(name: "TranslatorError", description: message, code: code).causedBy(cause)
   }
 
-  // Expo passes localizedDescription to JavaScript as the error message.
-  var errorDescription: String? { description }
+  static func unavailable() -> Exception {
+    return make("ON_DEVICE_UNAVAILABLE")
+  }
+
+  static func downloadFailed(_ language: String, cause: Error? = nil) -> Exception {
+    return make("DOWNLOAD_FAILED", language, cause: cause)
+  }
 }

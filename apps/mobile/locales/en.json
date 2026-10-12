@@ -1,0 +1,12 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "Translator",
+    "NSCameraUsageDescription": "The camera is used to read text in signs, menus and documents so it can be translated.",
+    "NSMicrophoneUsageDescription": "The microphone is used when you speak something to translate.",
+    "NSSpeechRecognitionUsageDescription": "Speech recognition turns what you say into text so it can be translated. When possible this happens on your device.",
+    "NSFaceIDUsageDescription": "Face ID unlocks Translator when App Lock is on, so only you can see your translations."
+  },
+  "android": {
+    "app_name": "Translator"
+  }
+}

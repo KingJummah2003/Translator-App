@@ -1,10 +1,17 @@
-import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Switch, View } from 'react-native';
-import { space, useColors } from '@/theme';
+import { Children, Fragment, type ReactNode } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Switch, View } from 'react-native';
+import { iconSize, radius, space, useColors } from '@/theme';
+import { Card } from './Card';
 import { Icon, type IconName } from './Icon';
+import { PressableScale } from './motion';
 import { Text } from './Text';
 
-/** A settings-style list row: icon, title, optional detail, chevron / switch / custom end. */
+const ICON_SLOT = iconSize.lg;
+
+/**
+ * A list row: leading icon slot, title and optional detail, then a chevron, switch, spinner or a
+ * custom `end`. The whole row is one screen-reader stop (a switch row is announced as a switch).
+ */
 export function Row({
   icon,
   title,
@@ -14,6 +21,11 @@ export function Row({
   destructive,
   value,
   onValueChange,
+  loading,
+  disabled,
+  chevron,
+  accessibilityLabel,
+  accessibilityHint,
 }: {
   icon?: IconName;
   title: string;
@@ -23,19 +35,30 @@ export function Row({
   destructive?: boolean;
   value?: boolean;
   onValueChange?: (v: boolean) => void;
+  /** Busy: spinner in place of the chevron, taps ignored. */
+  loading?: boolean;
+  disabled?: boolean;
+  /** Show the chevron (default: when the row navigates and has no custom end). */
+  chevron?: boolean;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }) {
   const c = useColors();
   const isSwitch = onValueChange !== undefined;
-  return (
-    <Pressable
-      accessibilityRole={isSwitch ? 'switch' : onPress ? 'button' : undefined}
-      accessibilityState={isSwitch ? { checked: value } : undefined}
-      disabled={!onPress && !isSwitch}
-      onPress={isSwitch ? () => onValueChange(!value) : onPress}
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? c.surfaceAlt : 'transparent' }]}>
-      {icon && <Icon name={icon} size={20} color={destructive ? c.danger : c.textMuted} />}
+  const interactive = isSwitch || !!onPress;
+  const inactive = !!disabled || !!loading;
+  const showChevron = chevron ?? (!!onPress && !end && !isSwitch);
+  const iconColor = disabled ? c.textFaint : destructive ? c.danger : c.textMuted;
+
+  const content = (
+    <>
+      {icon ? (
+        <View style={styles.iconSlot}>
+          <Icon name={icon} size={iconSize.md} color={iconColor} />
+        </View>
+      ) : null}
       <View style={styles.texts}>
-        <Text variant="body" tone={destructive ? 'danger' : 'default'}>
+        <Text variant="body" tone={disabled ? 'faint' : destructive ? 'danger' : 'default'}>
           {title}
         </Text>
         {detail ? (
@@ -45,33 +68,94 @@ export function Row({
         ) : null}
       </View>
       {end}
-      {isSwitch ? (
-        <Switch value={value} onValueChange={onValueChange} trackColor={{ true: c.accent }} />
-      ) : onPress && !end ? (
-        <Icon name="chevron" size={14} color={c.textFaint} />
+      {loading ? (
+        <ActivityIndicator color={c.textMuted} />
+      ) : isSwitch ? (
+        <Switch
+          value={value}
+          onValueChange={onValueChange}
+          disabled={inactive}
+          trackColor={{ false: c.borderStrong, true: c.accent }}
+          thumbColor={Platform.OS === 'android' ? (value ? c.onAccent : c.surface) : undefined}
+          ios_backgroundColor={c.borderStrong}
+          // The row is the control for screen readers; the switch alone would be a second, unnamed stop.
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        />
+      ) : showChevron ? (
+        <Icon name="chevron" size={iconSize.sm} color={c.textFaint} />
       ) : null}
-    </Pressable>
+    </>
+  );
+
+  // An informational row is plain text for screen readers (a disabled Pressable reads as "dimmed").
+  // It is one stop unless its `end` holds its own control (a Download button), which must stay reachable.
+  if (!interactive) {
+    return (
+      <View style={styles.row} accessible={!end} accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}>
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <PressableScale
+      accessibilityRole={isSwitch ? 'switch' : 'button'}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled: inactive, busy: !!loading, ...(isSwitch ? { checked: !!value } : null) }}
+      disabled={inactive}
+      haptic={!isSwitch}
+      scaleTo={1}
+      highlight={c.pressed}
+      onPress={isSwitch ? () => onValueChange(!value) : onPress}
+      style={styles.row}>
+      {content}
+    </PressableScale>
   );
 }
 
-export function Section({ title, children }: { title?: string; children: ReactNode }) {
+/**
+ * A titled group of rows on one card, with inset separators between rows. The title is a
+ * screen-reader heading; an optional footer explains the group.
+ */
+export function Section({ title, footer, children }: { title?: string; footer?: string; children: ReactNode }) {
   const c = useColors();
+  const rows = Children.toArray(children);
   return (
     <View style={styles.section}>
-      {title && (
-        <Text variant="micro" tone="muted" style={styles.sectionTitle}>
-          {title.toUpperCase()}
+      {title ? (
+        <Text variant="eyebrow" tone="muted" heading style={styles.sectionText}>
+          {title}
         </Text>
-      )}
-      <View style={[styles.group, { backgroundColor: c.surface, borderColor: c.border }]}>{children}</View>
+      ) : null}
+      <Card padding={0}>
+        {/* Clips row highlights to the card's corners without clipping the card's shadow. */}
+        <View style={styles.clip}>
+          {rows.map((row, i) => (
+            <Fragment key={i}>
+              {i > 0 ? <View style={[styles.separator, { backgroundColor: c.border }]} /> : null}
+              {row}
+            </Fragment>
+          ))}
+        </View>
+      </Card>
+      {footer ? (
+        <Text variant="caption" tone="muted" style={styles.sectionText}>
+          {footer}
+        </Text>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingHorizontal: space.lg, minHeight: 52, paddingVertical: space.sm },
-  texts: { flex: 1, gap: 2 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, minHeight: 56 },
+  iconSlot: { width: ICON_SLOT, alignItems: 'center' },
+  texts: { flex: 1, minWidth: 0, gap: 2 },
   section: { gap: space.sm },
-  sectionTitle: { paddingHorizontal: space.lg },
-  group: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  sectionText: { paddingHorizontal: space.lg },
+  clip: { borderRadius: radius.lg, overflow: 'hidden' },
+  // Starts under the title, past the icon slot (Material / iOS inset list style).
+  separator: { height: StyleSheet.hairlineWidth, marginStart: space.lg + ICON_SLOT + space.md },
 });

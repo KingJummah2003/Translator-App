@@ -40,6 +40,8 @@ const MIGRATIONS: string[] = [
      data TEXT NOT NULL, fetched_at INTEGER NOT NULL,
      PRIMARY KEY (word, lang, ui)
    );`,
+  // The word sheet now caches under ui = 'v3:<lang>'; older rows (no dialect data) are never read.
+  `DELETE FROM dictionary WHERE ui NOT LIKE 'v3:%';`,
 ];
 
 /**
@@ -59,10 +61,13 @@ async function openKeyed(key: string): Promise<SQLite.SQLiteDatabase> {
   return db;
 }
 
-/** Deletes the database and its WAL side files. A stale WAL would otherwise be replayed into the new file. */
+/**
+ * Deletes the database and its WAL side files. A stale WAL would otherwise be replayed into
+ * the new file. The main file is removed by hand too if expo-sqlite refused.
+ */
 async function deleteDatabaseFiles(path: string): Promise<void> {
   await SQLite.deleteDatabaseAsync(DB_NAME).catch(() => {});
-  for (const suffix of ['-wal', '-shm', '-journal']) {
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
     try {
       const file = new File(`file://${encodeURI(path + suffix)}`);
       if (file.exists) file.delete();
@@ -72,21 +77,7 @@ async function deleteDatabaseFiles(path: string): Promise<void> {
   }
 }
 
-async function open(): Promise<SQLite.SQLiteDatabase> {
-  const key = await databaseKey();
-  let db = await openKeyed(key);
-  try {
-    // The first real read is where a wrong key or a damaged file shows up.
-    await db.getFirstAsync('SELECT count(*) FROM sqlite_master');
-  } catch (err) {
-    if (!isUnreadableDatabaseError(err)) throw err;
-    // Only local history, settings and the dictionary cache are lost; the app keeps working.
-    const path = db.databasePath;
-    await db.closeAsync().catch(() => {});
-    await deleteDatabaseFiles(path);
-    wasReset = true;
-    db = await openKeyed(key);
-  }
+async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   let version = row?.user_version ?? 0;
@@ -98,6 +89,31 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       await db.execAsync(`PRAGMA user_version = ${version + 1}`);
     });
     version++;
+  }
+}
+
+/** Opens, checks and migrates the database; never leaves a half-open connection behind. */
+async function open(): Promise<SQLite.SQLiteDatabase> {
+  const key = await databaseKey();
+  let db = await openKeyed(key);
+  try {
+    // The first real read is where a wrong key or a damaged file shows up.
+    await db.getFirstAsync('SELECT count(*) FROM sqlite_master');
+  } catch (err) {
+    const path = db.databasePath;
+    // expo-sqlite caches open connections by path: close this one so a retry starts clean.
+    await db.closeAsync().catch(() => {});
+    if (!isUnreadableDatabaseError(err)) throw err;
+    // Only local history, settings and the dictionary cache are lost; the app keeps working.
+    await deleteDatabaseFiles(path);
+    wasReset = true;
+    db = await openKeyed(key);
+  }
+  try {
+    await migrate(db);
+  } catch (err) {
+    await db.closeAsync().catch(() => {});
+    throw err;
   }
   return db;
 }
@@ -155,24 +171,30 @@ export async function addHistory(
 ): Promise<void> {
   if (!item.input.trim() || !item.output.trim() || item.source === item.target) return;
   const db = await getDb();
-  const last = await db.getFirstAsync<Pick<HistoryItem, 'id' | 'source' | 'target' | 'input' | 'created_at'>>(
-    'SELECT id, source, target, input, created_at FROM history ORDER BY id DESC LIMIT 1',
+  const last = await db.getFirstAsync<Pick<HistoryItem, 'id' | 'source' | 'target' | 'input' | 'engine' | 'created_at'>>(
+    'SELECT id, source, target, input, engine, created_at FROM history ORDER BY id DESC LIMIT 1',
   );
+  const replaceLast = (id: number) =>
+    db.runAsync(
+      'UPDATE history SET source = ?, input = ?, output = ?, engine = ?, created_at = ? WHERE id = ?',
+      item.source,
+      item.input,
+      item.output,
+      item.engine,
+      Date.now(),
+      id,
+    );
   if (last && last.target === item.target) {
-    if (last.input === item.input) return;
+    if (last.input === item.input) {
+      // The same phrase again. "Better quality" after an on-device result keeps the cloud one.
+      if (item.engine === 'cloud' && last.engine !== 'cloud') await replaceLast(last.id);
+      return;
+    }
     // While typing, "Where is" then "Where is the pharmacy?" is one phrase being written.
     const sameSource = last.source === item.source || last.source === 'auto' || item.source === 'auto';
     const continues = item.input.startsWith(last.input) || last.input.startsWith(item.input);
     if (opts.revise && sameSource && continues && Date.now() - last.created_at < REVISE_WINDOW_MS) {
-      await db.runAsync(
-        'UPDATE history SET source = ?, input = ?, output = ?, engine = ?, created_at = ? WHERE id = ?',
-        item.source,
-        item.input,
-        item.output,
-        item.engine,
-        Date.now(),
-        last.id,
-      );
+      await replaceLast(last.id);
       return;
     }
   }

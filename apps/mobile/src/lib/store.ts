@@ -33,6 +33,8 @@ export interface AppState {
 const DEFAULT_SETTINGS: Settings = { saveHistory: true, autoSpeak: true, wifiOnlyDownloads: true, appLock: false, dialects: {} };
 const DEFAULT_LANGUAGES = { source: 'auto', target: uiLanguage === 'ar' ? 'en' : 'ar' };
 const RECENT_LIMIT = 8;
+/** A speech locale such as 'ar-EG', 'cmn-Hans-CN' or (iOS style) 'en_GB'. */
+const LOCALE_TAG = /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{1,8})*$/;
 
 let state: AppState = {
   ready: false,
@@ -79,7 +81,7 @@ function sanitizeSettings(raw: unknown): Settings {
   const dialects: Record<string, string> = {};
   if (s.dialects && typeof s.dialects === 'object') {
     for (const [code, tag] of Object.entries(s.dialects as Record<string, unknown>)) {
-      if (typeof tag === 'string' && isLanguageCode(code)) dialects[code] = tag;
+      if (typeof tag === 'string' && LOCALE_TAG.test(tag) && isLanguageCode(code)) dialects[code] = tag;
     }
   }
   return {
@@ -172,8 +174,14 @@ export function updateSettings(patch: Partial<Settings>): void {
 
 /** Sets (or with null clears) the speech dialect used for a language, e.g. ('ar', 'ar-EG'). */
 export function setDialect(code: string, locale: string | null): void {
+  if (!isLanguageCode(code) || (locale !== null && !LOCALE_TAG.test(locale))) return;
   const dialects = { ...state.settings.dialects };
   if (locale) dialects[code] = locale;
   else delete dialects[code];
   updateSettings({ dialects });
+}
+
+/** The speech locale the user chose for a language, or null for the default one. */
+export function dialectFor(code: string): string | null {
+  return state.settings.dialects[code] ?? null;
 }

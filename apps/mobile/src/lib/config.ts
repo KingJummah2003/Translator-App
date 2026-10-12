@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { TranslatorNative } from 'translator-native';
 
 const configured = (
   process.env.EXPO_PUBLIC_API_URL ??
@@ -23,7 +24,19 @@ export const REVENUECAT_KEYS = {
 
 const GOOGLE_PLUGIN = '@react-native-google-signin/google-signin';
 
-/** The reversed-client-ID URL scheme app.config.ts passed to the Google Sign-In plugin, if any. */
+/** URL schemes this binary registered (iOS), or null when unknown. Runs at import: never throws. */
+function registeredUrlSchemes(): string[] | null {
+  try {
+    return TranslatorNative.urlSchemes();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The reversed-client-ID URL scheme app.config.ts passed to the Google Sign-In plugin, if
+ * any. Only the plugin registers the scheme, so an environment variable alone does not count.
+ */
 function googleIosUrlScheme(): string {
   for (const plugin of Constants.expoConfig?.plugins ?? []) {
     if (Array.isArray(plugin) && plugin[0] === GOOGLE_PLUGIN) {
@@ -31,7 +44,7 @@ function googleIosUrlScheme(): string {
       if (typeof scheme === 'string') return scheme;
     }
   }
-  return process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME ?? '';
+  return '';
 }
 
 const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
@@ -46,7 +59,9 @@ const iosUrlScheme = googleIosUrlScheme();
 function googleSignInReady(): boolean {
   if (Platform.OS === 'ios') {
     const reversed = `com.googleusercontent.apps.${iosClientId.replace(/\.apps\.googleusercontent\.com$/, '')}`;
-    return iosClientId.length > 0 && iosUrlScheme === reversed;
+    // A stale prebuild can lack the URL type even when the config has it; null means unknown.
+    const registered = registeredUrlSchemes();
+    return iosClientId.length > 0 && iosUrlScheme === reversed && (registered === null || registered.includes(reversed));
   }
   if (Platform.OS === 'android') return webClientId.length > 0;
   return false;
@@ -59,3 +74,6 @@ export const GOOGLE_SIGN_IN = {
   /** Show the Google button only when this is true. */
   available: googleSignInReady(),
 };
+
+/** False in builds signed by a free Apple ID (PERSONAL_TEAM=1), which cannot use Sign in with Apple. */
+export const APPLE_SIGN_IN_ENABLED = Platform.OS === 'ios' && Constants.expoConfig?.extra?.appleSignIn !== false;

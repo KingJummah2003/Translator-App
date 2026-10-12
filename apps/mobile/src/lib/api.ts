@@ -7,12 +7,15 @@ type ApiErrorCode = ApiErrorBody['error']['code'];
 /**
  * A failed API call. `code` is stable and is what the UI maps to a localized message
  * (errorMessage in errors.ts); `message` is English detail for logs, never for display.
+ * Code 'network' means the server could not be reached; `timedOut` tells a request that
+ * hung apart from one that failed at once (no connection).
  */
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly code: ApiErrorCode | 'network',
     message: string,
+    readonly timedOut = false,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -88,7 +91,7 @@ export async function api(path: string, init: ApiInit = {}): Promise<Response> {
   } catch (err) {
     // The caller cancelled: let them see their own AbortError and ignore it.
     if (callerSignal?.aborted && !timedOut) throw err;
-    throw new ApiError(0, 'network', timedOut ? 'Request timed out' : 'No connection to the server');
+    throw new ApiError(0, 'network', timedOut ? 'Request timed out' : 'No connection to the server', timedOut);
   } finally {
     clearTimeout(timer);
     callerSignal?.removeEventListener('abort', forwardAbort);

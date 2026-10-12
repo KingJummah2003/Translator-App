@@ -8,6 +8,10 @@
     "icon": "./assets/images/icon.png",
     "scheme": "translator",
     "userInterfaceStyle": "automatic",
+    "locales": {
+      "en": "./locales/en.json",
+      "ar": "./locales/ar.json"
+    },
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -22,7 +26,7 @@
         "NSCameraUsageDescription": "The camera is used to read text in signs, menus and documents so it can be translated.",
         "NSMicrophoneUsageDescription": "The microphone is used when you speak something to translate.",
         "NSSpeechRecognitionUsageDescription": "Speech recognition turns what you say into text so it can be translated. When possible this happens on your device.",
-        "NSFaceIDUsageDescription": "Face ID lets you sign back in quickly when your session expires."
+        "NSFaceIDUsageDescription": "Face ID unlocks Translator when App Lock is on, so only you can see your translations."
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,
@@ -174,7 +178,7 @@
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "Face ID lets you sign back in quickly when your session expires."
+          "faceIDPermission": "Face ID unlocks Translator when App Lock is on, so only you can see your translations."
         }
       ],
       "expo-apple-authentication",
@@ -195,7 +199,9 @@
       ],
       "./plugins/with-mlkit-simulator",
       "./plugins/with-ios-scene-lifecycle",
-      "./plugins/with-mlkit-android"
+      "./plugins/with-mlkit-android",
+      "./plugins/with-android-rtl",
+      "./plugins/with-android-theme"
     ],
     "experiments": {
       "typedRoutes": true,

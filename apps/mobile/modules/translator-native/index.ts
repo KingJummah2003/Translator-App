@@ -29,11 +29,32 @@ export interface PdfText {
   scannedPages: number;
 }
 
+/**
+ * `code` of a rejected native call, the same on iOS and Android. The message has the form
+ * "CODE" or "CODE:detail", e.g. "MODEL_MISSING:ar".
+ */
+export type NativeErrorCode =
+  | 'ON_DEVICE_UNAVAILABLE' // iOS Simulator, Expo Go
+  | 'UNSUPPORTED_LANGUAGE' // detail: the language code
+  | 'MODEL_MISSING' // detail: the language whose model is not downloaded
+  | 'TRANSLATE_FAILED'
+  | 'DOWNLOAD_FAILED' // detail: the language code
+  | 'DELETE_FAILED'
+  | 'LIST_FAILED'
+  | 'BAD_IMAGE'
+  | 'OCR_FAILED'
+  | 'OCR_UNAVAILABLE' // Android: Google Play services is still installing the text recognition model
+  | 'BAD_PDF'
+  | 'LOCKED_PDF'
+  | 'NO_CONTEXT';
+
 interface NativeModule {
   isTranslationAvailable(): boolean;
   isTextRecognitionAvailable(): boolean;
   /** Script names Vision/ML Kit can read on this device, e.g. ['latin', 'arabic']. */
   supportedRecognitionLanguages(): string[];
+  /** Missing from builds made before it was added. */
+  urlSchemes?(): string[];
   translate(text: string, source: string, target: string): Promise<string>;
   downloadModel(language: string, wifiOnly: boolean): Promise<void>;
   deleteModel(language: string): Promise<void>;
@@ -50,8 +71,17 @@ export const translationAvailable = native?.isTranslationAvailable() ?? false;
 export const textRecognitionAvailable = native?.isTextRecognitionAvailable() ?? false;
 
 function required(): NativeModule {
-  if (!native) throw new Error('On-device translation is not available in this build');
+  if (!native) {
+    // Same shape as a native rejection, so callers handle one kind of error.
+    throw Object.assign(new Error('ON_DEVICE_UNAVAILABLE'), { code: 'ON_DEVICE_UNAVAILABLE' satisfies NativeErrorCode });
+  }
   return native;
+}
+
+/** The native error code of a rejected call, or null for any other error. */
+export function nativeErrorCode(e: unknown): NativeErrorCode | null {
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z_]+$/.test(code) && !code.startsWith('ERR_') ? (code as NativeErrorCode) : null;
 }
 
 export const TranslatorNative = {
@@ -62,9 +92,15 @@ export const TranslatorNative = {
   /** BCP-47 code, or 'und' when unsure. */
   identifyLanguage: async (text: string) => (native && translationAvailable ? native.identifyLanguage(text) : 'und'),
   recognizeText: (uri: string, languages: string[]) => required().recognizeText(uri, languages),
-  /** Reads a PDF on the device (nothing is uploaded). Errors: BAD_PDF, LOCKED_PDF. */
+  /** Reads a PDF on the device (nothing is uploaded). Errors: BAD_PDF, LOCKED_PDF, OCR_UNAVAILABLE. */
   extractPdfText: (uri: string, languages: string[] = [], maxPages = 50) => required().extractPdfText(uri, languages, maxPages),
   supportedRecognitionLanguages: () => native?.supportedRecognitionLanguages() ?? [],
+  /**
+   * URL schemes registered in this build's Info.plist (iOS), or null when unknown (Android,
+   * Expo Go, older builds). Google Sign-In aborts an iOS app whose reversed client ID is not
+   * among them.
+   */
+  urlSchemes: (): string[] | null => (native?.urlSchemes ? native.urlSchemes() : null),
   onDownloadProgress(listener: (e: { language: string; progress: number }) => void) {
     return native?.addListener('onDownloadProgress', listener) ?? { remove() {} };
   },

@@ -1,189 +1,532 @@
 import { useNetworkState } from 'expo-network';
-import { router } from 'expo-router';
-import { useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { router, useFocusEffect, useNavigation } from 'expo-router';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, ActivityIndicator, FlatList, Linking, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getLanguage } from '@translator/shared';
 import { Banner } from '@/components/Banner';
 import { IconButton } from '@/components/Button';
-import { Icon } from '@/components/Icon';
-import { displayName } from '@/components/LanguageBar';
+import { Icon, type IconName } from '@/components/Icon';
+import { LanguagePill, SwapButton, displayName } from '@/components/LanguageBar';
+import { LayoutAnimationConfig, ListenHalo, PressableScale, enterBubble, enterPop, exitFade, useTabFade } from '@/components/motion';
 import { Text } from '@/components/Text';
-import { ApiError } from '@/lib/api';
+import { announce, useScreenReaderEnabled } from '@/lib/a11y';
 import { authClient } from '@/lib/auth';
-import { t, uiLanguage } from '@/lib/i18n';
-import { speak, useDictation } from '@/lib/speech';
+import { errorActionLabel, errorMessage, toAppError, type AppError } from '@/lib/errors';
+import { formatList, t, tFor, uiLanguage, type StringKey } from '@/lib/i18n';
+import { speak, stopSpeaking, useDictation } from '@/lib/speech';
 import { setLanguages, updateSettings, useAppState } from '@/lib/store';
-import { downloadModels, planRoute, translateText } from '@/lib/translator';
-import { radius, space, useColors } from '@/theme';
+import { downloadModels, offlineCapable, planRoute, translateText, type Route } from '@/lib/translator';
+import { iconSize, radius, space, useColors, useTabBarInset } from '@/theme';
+
+type Side = 'me' | 'them';
 
 interface Message {
   id: number;
-  from: 'me' | 'them';
+  from: Side;
   original: string;
   translated: string;
+  /** The languages when it was said, so a later language change never mislabels it. */
+  source: string;
+  target: string;
+}
+
+/** A message as one side sees it: their own words, or the translation into their language. */
+interface Line {
+  id: number;
+  own: boolean;
+  text: string;
+  lang: string;
+}
+
+type MicState = 'idle' | 'listening' | 'busy';
+type FocusTarget = LayoutChangeEvent['currentTarget'];
+
+/** Text for one side: the other person gets their own language when the app has it (en, ar). */
+function textFor(side: Side, lang: string, key: StringKey): { text: string; language?: string } {
+  if (side === 'me') return { text: t(key) };
+  const theirs = tFor(lang, key);
+  return theirs ? { text: theirs, language: lang } : { text: t(key) };
+}
+
+/** Why the pair can't be translated right now, for the banner between the panels. */
+function routeNotice(route: Route, mine: string, theirs: string): { message: string; icon: IconName } | null {
+  // The language that has no on-device model, which is why the cloud is needed.
+  const cloudLang = displayName([theirs, mine].find((code) => !offlineCapable(code)) ?? theirs);
+  switch (route.kind) {
+    case 'download':
+      return { message: t('downloadToUseOffline', { lang: formatList(route.missing.map(displayName)) }), icon: 'download' };
+    case 'sign-in':
+      return { message: t('signInForCloud', { lang: cloudLang }), icon: 'cloud' };
+    case 'no-connection':
+      return { message: t('needsInternet', { lang: cloudLang }), icon: 'cloudOff' };
+    default:
+      return null;
+  }
 }
 
 /**
  * Face-to-face conversation. The phone lies between two people: the top half is turned
  * around for the other person. Each side speaks in their own language; the translation
- * appears on the other side and is read aloud.
+ * appears on the other side and is read aloud. Deliberately headerless: both halves need the
+ * full height, and each starts with its own language chip.
  */
 export default function TalkScreen() {
   const c = useColors();
   const insets = useSafeAreaInsets();
+  const bottomInset = useTabBarInset();
+  const fade = useTabFade();
+  const navigation = useNavigation();
+  const screenReader = useScreenReaderEnabled();
   const source = useAppState((s) => s.source);
   const target = useAppState((s) => s.target);
   const autoSpeak = useAppState((s) => s.settings.autoSpeak);
+  // planRoute reads the downloaded models from the store: re-render when they change.
   useAppState((s) => s.downloadedModels);
+  const downloading = useAppState((s) => s.downloading);
   const { data: session } = authClient.useSession();
   const network = useNetworkState();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Side | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  /** `${side}:${id}` of the bubble being read aloud. */
+  const [speaking, setSpeaking] = useState<string | null>(null);
   const nextId = useRef(1);
+  const micHost = useRef<FocusTarget | null>(null);
+  const focusMic = useRef(true);
 
   const mine = source === 'auto' ? uiLanguage : source;
   const theirs = target;
   const ctx = { signedIn: !!session, online: network.isInternetReachable !== false };
   const route = planRoute(mine, theirs, ctx);
+  const ready = route.kind === 'offline' || route.kind === 'cloud';
 
-  const dictation = useDictation((text, who) => void handleSpoken(text, who as 'me' | 'them'));
-
-  async function handleSpoken(text: string, who: 'me' | 'them') {
-    const from = who === 'me' ? mine : theirs;
-    const to = who === 'me' ? theirs : mine;
-    const r = planRoute(from, to, ctx);
-    if (r.kind !== 'offline' && r.kind !== 'cloud') {
-      setError(r.kind === 'download' ? t('downloadToUseOffline', { lang: r.missing.map(displayName).join(', ') }) : t('needsInternet', { lang: displayName(to) }));
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await translateText(text, from, to, { engine: r.kind });
-      setMessages((m) => [...m, { id: nextId.current++, from: who, original: text, translated: result.text }]);
-      if (autoSpeak) speak(result.text, to);
-    } catch (e) {
-      setError(e instanceof ApiError && e.code === 'insufficient_credits' ? t('notEnoughCredits') : e instanceof Error ? e.message : t('error'));
-    } finally {
-      setBusy(false);
-    }
+  function readAloud(text: string, lang: string, key: string) {
+    setSpeaking(key);
+    speak(text, lang, () => setSpeaking((current) => (current === key ? null : current)));
   }
 
-  const activeSide = useRef<'me' | 'them' | null>(null);
-  const listening = (who: 'me' | 'them') => dictation.listening && activeSide.current === who;
+  function handleSpoken(text: string, side: Side) {
+    const from = side === 'me' ? mine : theirs;
+    const to = side === 'me' ? theirs : mine;
+    const r = planRoute(from, to, ctx);
+    if (r.kind !== 'offline' && r.kind !== 'cloud') {
+      // The banner already shows why; the speaker just finished talking, so say it too.
+      announce(routeNotice(r, mine, theirs)?.message);
+      return;
+    }
+    const id = nextId.current++;
+    const listener: Side = side === 'me' ? 'them' : 'me';
+    setBusy(side);
+    setError(null);
+    // A promise chain, not try/finally, which the React Compiler can't optimise yet.
+    translateText(text, from, to, { engine: r.kind })
+      .then((result) => {
+        if (!result.text) return;
+        setMessages((m) => [...m, { id, from: side, original: text, translated: result.text, source: from, target: to }]);
+        if (autoSpeak) readAloud(result.text, to, `${listener}:${id}`);
+        else announce(result.text);
+      })
+      .catch((e: unknown) => setError(e))
+      .finally(() => setBusy(null));
+  }
 
-  const panel = (who: 'me' | 'them') => {
-    const lang = who === 'me' ? mine : theirs;
-    const flipped = who === 'them';
-    // Each side reads the whole conversation in its own language.
-    const lines = messages.map((m) => ({ id: m.id, own: m.from === who, text: m.from === who ? m.original : m.translated }));
-    const active = listening(who);
-    return (
-      <View style={[styles.panel, flipped && styles.flipped, { backgroundColor: flipped ? c.surfaceAlt : c.bg }]}>
-        <View style={styles.panelHead}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push({ pathname: '/languages', params: { side: who === 'me' ? 'source' : 'target', allowAuto: '0' } })}
-            style={[styles.langChip, { backgroundColor: c.surface, borderColor: c.border }]}>
-            <Text variant="label">{displayName(lang)}</Text>
-          </Pressable>
-          {who === 'me' && (
-            <IconButton icon="swap" label={t('swap')} onPress={() => setLanguages(theirs, mine)} />
-          )}
-          {who === 'me' && (
-            <IconButton
-              icon="speaker"
-              label={t('autoSpeak')}
-              active={autoSpeak}
-              size={36}
-              onPress={() => updateSettings({ autoSpeak: !autoSpeak })}
-            />
-          )}
-        </View>
-        <FlatList
-          data={[...lines].reverse()}
-          inverted
-          keyExtractor={(l) => String(l.id)}
-          contentContainerStyle={styles.lines}
-          ListEmptyComponent={
-            <Text variant="caption" tone="muted" align="center" style={styles.empty}>
-              {who === 'me' ? t('talkHint') : ''}
-            </Text>
-          }
-          renderItem={({ item }) => (
-            <Pressable
-              onLongPress={() => speak(item.text, lang)}
-              style={[
-                styles.bubble,
-                item.own ? styles.own : styles.other,
-                { backgroundColor: item.own ? c.accent : c.surface, borderColor: c.border },
-              ]}>
-              <Text variant="body" tone={item.own ? 'onAccent' : 'default'} language={lang}>
-                {item.text}
-              </Text>
-            </Pressable>
-          )}
-        />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={active ? t('stop') : `${t('holdToTalk')} (${displayName(lang)})`}
-          disabled={busy || (dictation.listening && !active)}
-          onPress={() => {
-            if (active) return dictation.stop();
-            activeSide.current = who;
-            void dictation.start(lang, who);
-          }}
-          style={[styles.mic, { backgroundColor: active ? c.danger : c.accent, opacity: busy ? 0.6 : 1 }]}>
-          <Icon name={active ? 'stop' : 'mic'} size={26} color={c.onAccent} />
-          <Text variant="label" tone="onAccent">
-            {active ? (dictation.partial || t('listening')) : t('holdToTalk')}
-          </Text>
-        </Pressable>
-      </View>
+  // The hook stops listening by itself on blur, unmount and when the app goes to the background.
+  const dictation = useDictation((text, tag) => handleSpoken(text, tag === 'them' ? 'them' : 'me'));
+
+  // Screen readers order the screen top to bottom, which would start on the other person's
+  // upside-down panel. Arriving on the tab moves focus to the owner's mic instead (not when a
+  // sheet such as the language list closes: focus stays where the user was).
+  useFocusEffect(
+    useCallback(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (screenReader && focusMic.current) {
+        focusMic.current = false;
+        timer = setTimeout(() => {
+          const host = micHost.current;
+          if (host) AccessibilityInfo.sendAccessibilityEvent(host, 'focus');
+        }, 600);
+      }
+      return () => {
+        if (timer) clearTimeout(timer);
+        if (navigation.getParent()?.isFocused()) focusMic.current = true;
+      };
+    }, [navigation, screenReader]),
+  );
+
+  const download = (languages: string[]) => {
+    downloadModels(languages).then(
+      () => setError(null),
+      (e: unknown) => setError(e),
     );
   };
 
+  const runAction = (e: AppError) => {
+    switch (e.action) {
+      case 'getCredits':
+      case 'restorePurchases':
+        return router.push('/plans');
+      case 'signIn':
+        return router.push('/sign-in');
+      case 'openSettings':
+        return void Linking.openSettings();
+      case 'download':
+        return download(e.languages?.length ? e.languages : route.kind === 'download' ? route.missing : [mine, theirs]);
+      case 'chooseLanguage':
+        return router.push({ pathname: '/languages', params: { side: 'target', allowAuto: '0' } });
+    }
+  };
+
+  const replay = (side: Side, line: Line) => {
+    const key = `${side}:${line.id}`;
+    if (speaking === key) return stopSpeaking();
+    readAloud(line.text, line.lang, key);
+  };
+
+  const toggleMic = (side: Side, lang: string) => {
+    if (dictation.listening && dictation.tag === side) return dictation.stop();
+    void dictation.start(lang, side);
+  };
+
+  // Newest first, for the inverted lists.
+  const linesFor = (side: Side): Line[] =>
+    messages
+      .map((m) =>
+        m.from === side ? { id: m.id, own: true, text: m.original, lang: m.source } : { id: m.id, own: false, text: m.translated, lang: m.target },
+      )
+      .reverse();
+
+  const micFor = (side: Side, lang: string) => {
+    const listening = dictation.listening && dictation.tag === side;
+    const state: MicState = listening ? 'listening' : busy === side ? 'busy' : 'idle';
+    const usable = ready && dictation.canDictate(lang);
+    const disabled = !listening && (busy !== null || dictation.listening || !usable);
+    return (
+      <MicButton
+        side={side}
+        lang={lang}
+        state={state}
+        open={listening && dictation.phase === 'listening'}
+        partial={listening ? dictation.partial : ''}
+        disabled={disabled}
+        onPress={() => toggleMic(side, lang)}
+        onLayout={
+          side === 'me'
+            ? (e) => {
+                micHost.current = e.currentTarget;
+              }
+            : undefined
+        }
+      />
+    );
+  };
+
+  const noteFor = (side: Side, lang: string) => {
+    const key: StringKey | null = !dictation.available ? 'speechUnavailable' : !dictation.canDictate(lang) ? 'speechLanguageUnsupported' : null;
+    return key ? textFor(side, lang, key) : null;
+  };
+
+  const panel = (side: Side) => {
+    const lang = side === 'me' ? mine : theirs;
+    const head =
+      side === 'me' ? (
+        <>
+          {/* The label fades in when the language changes, not when the screen first appears. */}
+          <LayoutAnimationConfig skipEntering>
+            <LanguagePill side="source" code={mine} allowAuto={false} />
+          </LayoutAnimationConfig>
+          <SwapButton onPress={() => setLanguages(theirs, mine)} disabled={dictation.listening || busy !== null} />
+          <IconButton icon="speaker" label={t('autoSpeak')} active={autoSpeak} toggle onPress={() => updateSettings({ autoSpeak: !autoSpeak })} />
+        </>
+      ) : (
+        <LayoutAnimationConfig skipEntering>
+          <LanguagePill side="target" code={theirs} allowAuto={false} label={getLanguage(theirs)?.native} labelLanguage={theirs} />
+        </LayoutAnimationConfig>
+      );
+    return (
+      <Panel
+        side={side}
+        lang={lang}
+        lines={linesFor(side)}
+        head={head}
+        mic={micFor(side, lang)}
+        note={noteFor(side, lang)}
+        speaking={speaking}
+        canReplay={!dictation.listening}
+        onReplay={(line) => replay(side, line)}
+      />
+    );
+  };
+
+  // One notice at a time between the panels: speech problems first, then translation errors,
+  // then what the language pair needs.
+  const speechMessage = dictation.failure ? errorMessage(dictation.failure) : '';
+  const appError = error ? toAppError(error) : null;
+  const notice = routeNotice(route, mine, theirs);
+  let banner: ReactNode = null;
+  if (speechMessage && dictation.failure) {
+    const settings = toAppError(dictation.failure).action === 'openSettings';
+    banner = (
+      <Banner
+        key="speech"
+        icon="mic"
+        tone={dictation.error === 'no-speech' ? 'info' : 'warning'}
+        message={speechMessage}
+        action={settings ? t('openSettings') : undefined}
+        onAction={settings ? () => void Linking.openSettings() : undefined}
+        onDismiss={dictation.clearError}
+      />
+    );
+  } else if (appError?.message) {
+    const languages = appError.languages ?? [];
+    banner = (
+      <Banner
+        key="error"
+        tone="danger"
+        message={appError.message}
+        action={appError.action ? errorActionLabel(appError.action) : undefined}
+        onAction={appError.action ? () => runAction(appError) : undefined}
+        loading={appError.action === 'download' && languages.some((l) => l in downloading)}
+        onDismiss={() => setError(null)}
+      />
+    );
+  } else if (notice) {
+    banner = (
+      <Banner
+        key={`route-${route.kind}`}
+        icon={notice.icon}
+        tone={route.kind === 'no-connection' ? 'warning' : 'info'}
+        message={notice.message}
+        action={route.kind === 'download' ? t('download') : route.kind === 'sign-in' ? t('signIn') : undefined}
+        onAction={route.kind === 'download' ? () => download(route.missing) : route.kind === 'sign-in' ? () => router.push('/sign-in') : undefined}
+        loading={route.kind === 'download' && route.missing.some((l) => l in downloading)}
+      />
+    );
+  }
+
   return (
-    <View style={[styles.flex, { paddingTop: insets.top, backgroundColor: c.bg }]}>
-      {panel('them')}
-      <View style={[styles.divider, { backgroundColor: c.border }]} />
-      {(error || route.kind === 'download' || route.kind === 'sign-in' || dictation.error === 'permission') && (
-        <View style={styles.banner}>
-          {dictation.error === 'permission' ? (
-            <Banner icon="mic" tone="warning" message={t('micPermission')} />
-          ) : error ? (
-            <Banner icon="warning" tone="danger" message={error} />
-          ) : route.kind === 'download' ? (
-            <Banner
-              icon="download"
-              message={t('downloadToUseOffline', { lang: route.missing.map(displayName).join(', ') })}
-              action={t('download')}
-              onAction={() => void downloadModels(route.missing).catch((e: Error) => setError(e.message))}
-            />
-          ) : (
-            <Banner icon="cloud" message={t('signInForCloud', { lang: displayName(theirs) })} action={t('signIn')} onAction={() => router.push('/sign-in')} />
-          )}
-        </View>
-      )}
+    // column-reverse: the owner's panel comes first for screen readers but sits at the bottom.
+    <Animated.View style={[styles.root, { backgroundColor: c.bg, paddingBottom: bottomInset }, fade]}>
       {panel('me')}
-      <View style={{ height: insets.bottom + 70 }} />
+      <View style={[styles.notices, banner ? styles.noticesOpen : null]}>{banner}</View>
+      <View style={[styles.divider, { backgroundColor: c.border }]} />
+      {panel('them')}
+      {/* The status bar takes the colour of the panel under it, so there is no seam. */}
+      <View style={{ height: insets.top, backgroundColor: c.surfaceAlt }} />
+    </Animated.View>
+  );
+}
+
+function Panel({
+  side,
+  lang,
+  lines,
+  head,
+  mic,
+  note,
+  speaking,
+  canReplay,
+  onReplay,
+}: {
+  side: Side;
+  lang: string;
+  lines: Line[];
+  head: ReactNode;
+  mic: ReactNode;
+  note: { text: string; language?: string } | null;
+  speaking: string | null;
+  canReplay: boolean;
+  onReplay: (line: Line) => void;
+}) {
+  const c = useColors();
+  const flipped = side === 'them';
+  // The other person only gets a hint when the app speaks their language.
+  const hint = flipped ? tFor(lang, 'talkHint') : t('talkHint');
+  return (
+    <View style={[styles.panel, flipped && styles.flipped, { backgroundColor: flipped ? c.surfaceAlt : c.bg }]}>
+      <View style={styles.head}>{head}</View>
+      <FlatList
+        data={lines}
+        inverted
+        keyExtractor={(l) => String(l.id)}
+        contentContainerStyle={styles.lines}
+        ListEmptyComponent={
+          hint ? (
+            <Text variant="caption" tone="muted" align="center" language={flipped ? lang : undefined} style={styles.empty}>
+              {hint}
+            </Text>
+          ) : null
+        }
+        renderItem={({ item, index }) => (
+          <Bubble line={item} newest={index === 0} speaking={speaking === `${side}:${item.id}`} disabled={!canReplay} onPress={() => onReplay(item)} />
+        )}
+      />
+      {note ? (
+        <Text variant="caption" tone="muted" align="center" language={note.language} style={styles.note}>
+          {note.text}
+        </Text>
+      ) : null}
+      {mic}
+    </View>
+  );
+}
+
+/** One message. Tap to hear it again in this side's language; tap again to stop. */
+function Bubble({ line, newest, speaking, disabled, onPress }: { line: Line; newest: boolean; speaking: boolean; disabled: boolean; onPress: () => void }) {
+  const c = useColors();
+  const fg = line.own ? c.onAccent : c.accent;
+  return (
+    // Only the newest bubble animates, so scrolling back through recycled cells never replays
+    // an entrance. It sits on a wrapper because PressableScale owns the transform.
+    <Animated.View entering={newest ? enterBubble : undefined} style={line.own ? styles.own : styles.other}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={line.text}
+        accessibilityLanguage={getLanguage(line.lang)?.speech ?? line.lang}
+        accessibilityHint={speaking ? t('talkStopReadingHint') : t('talkReplayHint')}
+        accessibilityState={{ disabled, busy: speaking }}
+        disabled={disabled}
+        scaleTo={0.98}
+        highlight={c.pressed}
+        onPress={onPress}
+        style={[
+          styles.bubble,
+          line.own ? styles.ownCorner : styles.otherCorner,
+          { backgroundColor: line.own ? c.accent : c.surface, borderColor: c.border },
+        ]}>
+        <Text variant="body" tone={line.own ? 'onAccent' : 'default'} language={line.lang} style={styles.bubbleText}>
+          {line.text}
+        </Text>
+        {speaking ? (
+          <Animated.View entering={enterPop} exiting={exitFade} style={styles.bubbleIcon}>
+            <Icon name="speaker" size={iconSize.sm} color={fg} />
+          </Animated.View>
+        ) : null}
+      </PressableScale>
+    </Animated.View>
+  );
+}
+
+/**
+ * The big button of one side. Its text is in that person's language where the app has it; the
+ * screen-reader label stays in the interface language, because the screen reader belongs to the
+ * phone's owner.
+ */
+function MicButton({
+  side,
+  lang,
+  state,
+  open,
+  partial,
+  disabled,
+  onPress,
+  onLayout,
+}: {
+  side: Side;
+  lang: string;
+  state: MicState;
+  /** The microphone is actually open (not still preparing). */
+  open: boolean;
+  partial: string;
+  disabled: boolean;
+  onPress: () => void;
+  onLayout?: (e: LayoutChangeEvent) => void;
+}) {
+  const c = useColors();
+  const listening = state === 'listening';
+  const isBusy = state === 'busy';
+  // Busy keeps the accent: it's this side's words being translated, not a dead button.
+  const inactive = disabled && !isBusy;
+  const bg = listening ? c.danger : inactive ? (side === 'them' ? c.surface : c.surfaceAlt) : c.accent;
+  const fg = inactive ? c.textFaint : c.onAccent;
+
+  const key: StringKey = listening ? 'listening' : isBusy ? 'translating' : 'holdToTalk';
+  // Without interface strings in their language, the other person sees its native name ("Français").
+  const label =
+    listening && partial
+      ? { text: partial, language: lang }
+      : side === 'me'
+        ? { text: t(key) }
+        : { text: tFor(lang, key) ?? getLanguage(lang)?.native ?? displayName(lang), language: lang };
+
+  const name = displayName(lang);
+  const spoken = listening ? `${t('stop')}, ${name}` : isBusy ? t('translating') : `${t('holdToTalk')}, ${name}`;
+  const glyph = isBusy ? 'busy' : listening ? 'stop' : 'mic';
+
+  return (
+    <View>
+      <ListenHalo active={open} color={c.danger} radius={radius.pill} scale={{ x: 1.06, y: 1.45 }} />
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={spoken}
+        accessibilityState={{ disabled, busy: isBusy }}
+        disabled={disabled}
+        highlight={c.pressed}
+        onPress={onPress}
+        onLayout={onLayout}
+        style={[styles.mic, { backgroundColor: bg, borderColor: inactive ? c.border : bg }]}>
+        {/* The glyph pops when it changes (mic -> stop -> spinner), never on first render. */}
+        <LayoutAnimationConfig skipEntering>
+          <Animated.View key={glyph} entering={enterPop} style={styles.micGlyph}>
+            {isBusy ? <ActivityIndicator color={fg} /> : <Icon name={listening ? 'stop' : 'mic'} size={iconSize.lg} color={fg} />}
+          </Animated.View>
+        </LayoutAnimationConfig>
+        <Text
+          variant="button"
+          align="center"
+          language={label.language}
+          // Live words show their newest end on one line.
+          numberOfLines={listening && partial ? 1 : 2}
+          ellipsizeMode={listening && partial ? 'head' : 'tail'}
+          style={[styles.micLabel, { color: fg }]}>
+          {label.text}
+        </Text>
+      </PressableScale>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  root: { flex: 1, flexDirection: 'column-reverse' },
   panel: { flex: 1, paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.sm },
   flipped: { transform: [{ rotate: '180deg' }] },
-  panelHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  langChip: { paddingHorizontal: space.lg, paddingVertical: space.sm, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth },
+  head: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   lines: { gap: space.sm, paddingVertical: space.sm, flexGrow: 1, justifyContent: 'flex-end' },
   empty: { paddingHorizontal: space.xl },
-  bubble: { maxWidth: '85%', paddingHorizontal: space.lg, paddingVertical: space.md, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth },
-  own: { alignSelf: 'flex-end', borderBottomEndRadius: 6 },
-  other: { alignSelf: 'flex-start', borderBottomStartRadius: 6 },
-  mic: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.sm, minHeight: 56, borderRadius: radius.pill, paddingHorizontal: space.xl },
+  own: { maxWidth: '85%', alignSelf: 'flex-end' },
+  other: { maxWidth: '85%', alignSelf: 'flex-start' },
+  bubble: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    // Clips the pressed wash to the tail corner.
+    overflow: 'hidden',
+  },
+  // The corner nearest the speaker is tighter, like a speech-bubble tail.
+  ownCorner: { borderBottomEndRadius: 6 },
+  otherCorner: { borderBottomStartRadius: 6 },
+  bubbleText: { flexShrink: 1 },
+  bubbleIcon: { paddingBottom: 3 },
+  mic: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    minHeight: 56,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.sm,
+  },
+  micGlyph: { width: iconSize.lg, height: iconSize.lg, alignItems: 'center', justifyContent: 'center' },
+  micLabel: { flexShrink: 1 },
+  note: { paddingHorizontal: space.lg },
+  notices: { paddingHorizontal: space.lg },
+  noticesOpen: { paddingVertical: space.sm },
   divider: { height: StyleSheet.hairlineWidth },
-  banner: { paddingHorizontal: space.lg, paddingVertical: space.sm },
 });
