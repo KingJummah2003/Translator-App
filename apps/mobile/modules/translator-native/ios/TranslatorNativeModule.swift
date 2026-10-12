@@ -185,7 +185,9 @@ public class TranslatorNativeModule: Module {
     let model = TranslateRemoteModel.translateRemoteModel(language: TranslateLanguage(rawValue: language))
     let manager = ModelManager.modelManager()
     if manager.isModelDownloaded(model) { return }
-    let conditions = ModelDownloadConditions(allowsCellularAccess: !wifiOnly, allowsBackgroundDownloading: true)
+    // Foreground transfer: iOS may postpone background downloads (mobile data, Low Power Mode),
+    // which left the download waiting with no progress while the user watched the screen.
+    let conditions = ModelDownloadConditions(allowsCellularAccess: !wifiOnly, allowsBackgroundDownloading: false)
 
     try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
       let job = ModelDownload(language: language, continuation: c)
